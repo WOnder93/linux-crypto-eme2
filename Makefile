@@ -1,8 +1,10 @@
-obj-m += eme2.o
+obj-m += eme2_module.o
+
+eme2_module-objs += eme2.o eme2_test.o
 
 KERNEL_VERSION=$(shell uname -r)
 
-all: eme2.c
+all:
 	make -C /lib/modules/$(KERNEL_VERSION)/build M=$(PWD) modules
 
 clean:
