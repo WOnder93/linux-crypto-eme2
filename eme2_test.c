@@ -58,8 +58,20 @@ static int run_test_case(const test_case_t *c, unsigned int number)
     struct crypto_tfm *tfm;
     struct eme2_ctx *ctx;
     u8 *buffer = NULL;
-    struct scatterlist *sgin = NULL, *sgout = NULL;
+    struct scatterlist *sg = NULL;
     struct blkcipher_desc desc;
+
+    buffer = kmalloc(c->plaintext_len, GFP_KERNEL);
+    if (!buffer) {
+        printk("eme2: tests: ERROR allocating buffer!\n");
+        goto out;
+    }
+
+    sg = sg_alloc_buffer(buffer, c->plaintext_len);
+    if (!sg) {
+        printk("eme2: tests: ERROR allocating scatterlist!\n");
+        goto out;
+    }
 
     cipher = crypto_alloc_blkcipher("eme2(aes)", 0, 0);
     if (IS_ERR(cipher)) {
@@ -78,13 +90,8 @@ static int run_test_case(const test_case_t *c, unsigned int number)
     tfm = crypto_blkcipher_tfm(cipher);
     ctx = crypto_tfm_ctx(tfm);
 
-    buffer = kmalloc(c->plaintext_len, GFP_KERNEL);
-    if (buffer == NULL) {
-        printk("eme2: tests: ERROR allocating buffer!\n");
-        goto out;
-    }
-
-    err = eme2_encrypt(ctx, buffer, c->plaintext, c->plaintext_len,
+    memcpy(buffer, c->plaintext, c->plaintext_len);
+    err = eme2_encrypt(ctx, sg, sg, c->plaintext_len,
                        c->assoc_data, c->assoc_data_len);
     if (err) {
         printk("eme2: tests: ERROR encrypting!\n");
@@ -96,7 +103,8 @@ static int run_test_case(const test_case_t *c, unsigned int number)
         printk("eme2: tests: encryption-%u: Testcase failed!\n", number);
     }
 
-    err = eme2_decrypt(ctx, buffer, c->ciphertext, c->plaintext_len,
+    memcpy(buffer, c->ciphertext, c->plaintext_len);
+    err = eme2_decrypt(ctx, sg, sg, c->plaintext_len,
                        c->assoc_data, c->assoc_data_len);
     if (err) {
         printk("eme2: tests: ERROR decrypting!\n");
@@ -115,17 +123,7 @@ static int run_test_case(const test_case_t *c, unsigned int number)
 
         memcpy(buffer, c->plaintext, c->plaintext_len);
 
-        sgin = sg_alloc_buffer(buffer, c->plaintext_len);
-        if (!sgin) {
-            printk("eme2: tests: ERROR allocating scatterlist!\n");
-            goto out;
-        }
-        sgout = sg_alloc_buffer(buffer, c->plaintext_len);
-        if (!sgout) {
-            printk("eme2: tests: ERROR allocating scatterlist!\n");
-            goto out;
-        }
-        err = crypto_blkcipher_encrypt(&desc, sgout, sgin, c->plaintext_len);
+        err = crypto_blkcipher_encrypt(&desc, sg, sg, c->plaintext_len);
         if (err) {
             printk("eme2: tests: ERROR encrypting via crypto API!\n");
             goto out;
@@ -137,10 +135,8 @@ static int run_test_case(const test_case_t *c, unsigned int number)
         }
     }
 out:
-    if (sgin)
-        kfree(sgin);
-    if (sgout)
-        kfree(sgout);
+    if (sg)
+        kfree(sg);
     if (buffer)
         kfree(buffer);
     if (cipher)
