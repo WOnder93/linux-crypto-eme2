@@ -1,6 +1,7 @@
 #ifndef _CRYPTO_EME2_H
 #define _CRYPTO_EME2_H
 
+#include <linux/scatterlist.h>
 #include <crypto/b128ops.h>
 
 #define EME2_BLOCK_SIZE 16
