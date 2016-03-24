@@ -69,6 +69,9 @@ static inline unsigned int blockwalk_read_next(
                                                            : walk->bytesleft;
     scatterwalk_copychunks(buffer, &walk->sg_walk, size, 0);
     walk->bytesleft -= size;
+    if (walk->bytesleft == 0) {
+        scatterwalk_done(&walk->sg_walk, 0, 0);
+    }
     return size;
 }
 
@@ -78,11 +81,9 @@ static inline void blockwalk_write_next(struct blockwalk *walk, void *buffer)
                                                            : walk->bytesleft;
     scatterwalk_copychunks(buffer, &walk->sg_walk, size, 1);
     walk->bytesleft -= size;
-}
-
-static inline void blockwalk_flush(struct blockwalk *walk)
-{
-    scatterwalk_done(&walk->sg_walk, 1, 0);
+    if (walk->bytesleft == 0) {
+        scatterwalk_done(&walk->sg_walk, 0, 0);
+    }
 }
 
 static int setkey(struct crypto_tfm *parent, const u8 *key, unsigned int keylen)
@@ -204,7 +205,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
 
     struct blockwalk wsrc, wdst;
 
-    unsigned int avail, j;
+    unsigned int j, extra_bytes = nbytes % EME2_BLOCK_SIZE;
     be128 t_star, l, mp, mc, m1, m, ccc1, tmp;
 
     /* input must be at least one block: */
@@ -242,22 +243,22 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     /* CCC_1 = T_star */
     ccc1 = t_star;
 
-    if (unlikely(wsrc.bytesleft != 0)) {
-        avail = blockwalk_read_next(&wsrc, &tmp);
+    if (unlikely(extra_bytes != 0)) {
+        blockwalk_read_next(&wsrc, &tmp);
 
         /* MP = MP xor PPP_m */
-        eme2_xor_padded(&mp, &tmp, avail);
+        eme2_xor_padded(&mp, &tmp, extra_bytes);
 
         /* MM = AES-Enc(K_AES, MP) */
         fn(tfm, (u8 *)&mc, (u8 *)&mp);
 
         /* C_m = P_m xor MM [truncated] */
-        crypto_xor((u8 *)&tmp, (u8 *)&mc, avail);
+        crypto_xor((u8 *)&tmp, (u8 *)&mc, extra_bytes);
 
         blockwalk_write_next(&wdst, &tmp);
 
         /* CCC_1 = CCC_1 xor CCC_m */
-        eme2_xor_padded(&ccc1, &tmp, avail);
+        eme2_xor_padded(&ccc1, &tmp, extra_bytes);
 
         /* MC = MC_1 = AES-Enc(K_AES, MM) */
         fn(tfm, (u8 *)&mc, (u8 *)&mc);
@@ -276,8 +277,8 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     /* L = K_ECB */
     l = ctx->key_ecb;
 
-    blockwalk_start(&wsrc, EME2_BLOCK_SIZE, dst, nbytes);
-    blockwalk_start(&wdst, EME2_BLOCK_SIZE, dst, nbytes);
+    blockwalk_start(&wsrc, EME2_BLOCK_SIZE, dst, nbytes - extra_bytes);
+    blockwalk_start(&wdst, EME2_BLOCK_SIZE, dst, nbytes - extra_bytes);
 
     /* skip the first block, will be written later: */
     blockwalk_skip_next(&wsrc);
@@ -318,16 +319,14 @@ static int eme2_crypt(struct eme2_ctx *ctx,
         blockwalk_write_next(&wdst, &tmp);
         ++j;
     }
-    blockwalk_flush(&wdst);
 
     /* C_1 = AES-Enc(K_AES, CCC_1) xor L */
     fn(tfm, (u8 *)&ccc1, (u8 *)&ccc1);
     be128_xor(&ccc1, &ccc1, &ctx->key_ecb);
 
     /* write C_1, which we skipped before: */
-    blockwalk_start(&wdst, EME2_BLOCK_SIZE, dst, nbytes);
+    blockwalk_start(&wdst, EME2_BLOCK_SIZE, dst, EME2_BLOCK_SIZE);
     blockwalk_write_next(&wdst, &ccc1);
-    blockwalk_flush(&wdst);
     return 0;
 }
 
