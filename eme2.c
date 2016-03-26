@@ -27,63 +27,84 @@
 #include <crypto/scatterwalk.h>
 
 struct blockwalk {
+    int out;
     unsigned int blocksize;
-    struct scatter_walk sg_walk;
     unsigned int bytesleft;
+    void *mapped;
+    struct scatter_walk sg_walk;
 };
 
 static inline void blockwalk_start(
-        struct blockwalk *walk, unsigned int blocksize,
+        struct blockwalk *walk, int out, unsigned int blocksize,
         struct scatterlist *sg, unsigned int nbytes)
 {
+    walk->out = out;
     walk->blocksize = blocksize;
     walk->bytesleft = nbytes;
     scatterwalk_start(&walk->sg_walk, sg);
+
+    walk->mapped = scatterwalk_map(&walk->sg_walk) - walk->sg_walk.offset;
+}
+
+enum {
+    BLOCKWALK_SKIP,
+    BLOCKWALK_READ,
+    BLOCKWALK_WRITE,
+};
+
+static inline void blockwalk_next(struct blockwalk *walk, int action,
+                                  void *buffer)
+{
+    unsigned int size = walk->bytesleft >= walk->blocksize
+            ? walk->blocksize : walk->bytesleft;
+    unsigned int chunk, left = size;
+
+    walk->bytesleft -= size;
+    for (;;) {
+        chunk = scatterwalk_clamp(&walk->sg_walk, left);
+        switch(action) {
+        case BLOCKWALK_READ:
+            memcpy((u8 *)buffer + size - left,
+                   walk->mapped + walk->sg_walk.offset,
+                   chunk);
+            break;
+        case BLOCKWALK_WRITE:
+            memcpy(walk->mapped + walk->sg_walk.offset,
+                   (u8 *)buffer + size - left,
+                   chunk);
+            break;
+        }
+
+        scatterwalk_advance(&walk->sg_walk, chunk);
+        left -= chunk;
+        if (left + walk->bytesleft == 0) {
+            scatterwalk_unmap(walk->mapped);
+            scatterwalk_done(&walk->sg_walk, walk->out, 0);
+        } else if (scatterwalk_pagelen(&walk->sg_walk) == 0) {
+            scatterwalk_unmap(walk->mapped);
+            scatterwalk_done(&walk->sg_walk, walk->out, 1);
+            walk->mapped = scatterwalk_map(&walk->sg_walk)
+                    - walk->sg_walk.offset;
+        }
+        if (left == 0) {
+            break;
+        }
+    }
 }
 
 static inline void blockwalk_skip_next(struct blockwalk *walk)
 {
-    unsigned int size = walk->bytesleft >= walk->blocksize ? walk->blocksize
-                                                           : walk->bytesleft;
-    unsigned int pagelen, left = size;
-    for (;;) {
-        pagelen = scatterwalk_pagelen(&walk->sg_walk);
-        if (left >= pagelen) {
-            left -= pagelen;
-            scatterwalk_done(&walk->sg_walk, 0, left);
-            if (left == 0) {
-                break;
-            }
-        } else {
-            scatterwalk_advance(&walk->sg_walk, left);
-            break;
-        }
-    }
-    walk->bytesleft -= size;
+    blockwalk_next(walk, BLOCKWALK_SKIP, NULL);
 }
 
-static inline unsigned int blockwalk_read_next(
-        struct blockwalk *walk, void *buffer)
+static inline void blockwalk_read_next(struct blockwalk *walk, void *buffer)
 {
-    unsigned int size = walk->bytesleft >= walk->blocksize ? walk->blocksize
-                                                           : walk->bytesleft;
-    scatterwalk_copychunks(buffer, &walk->sg_walk, size, 0);
-    walk->bytesleft -= size;
-    if (walk->bytesleft == 0) {
-        scatterwalk_done(&walk->sg_walk, 0, 0);
-    }
-    return size;
+    blockwalk_next(walk, BLOCKWALK_READ, buffer);
 }
 
 static inline void blockwalk_write_next(struct blockwalk *walk, void *buffer)
 {
-    unsigned int size = walk->bytesleft >= walk->blocksize ? walk->blocksize
-                                                           : walk->bytesleft;
-    scatterwalk_copychunks(buffer, &walk->sg_walk, size, 1);
-    walk->bytesleft -= size;
-    if (walk->bytesleft == 0) {
-        scatterwalk_done(&walk->sg_walk, 0, 0);
-    }
+    blockwalk_next(walk, BLOCKWALK_WRITE, buffer);
 }
 
 static int setkey(struct crypto_tfm *parent, const u8 *key, unsigned int keylen)
@@ -222,8 +243,8 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     /* L = K_ECB */
     l = ctx->key_ecb;
 
-    blockwalk_start(&wsrc, EME2_BLOCK_SIZE, src, nbytes);
-    blockwalk_start(&wdst, EME2_BLOCK_SIZE, dst, nbytes);
+    blockwalk_start(&wsrc, 0, EME2_BLOCK_SIZE, src, nbytes);
+    blockwalk_start(&wdst, 1, EME2_BLOCK_SIZE, dst, nbytes);
 
     while (wsrc.bytesleft >= EME2_BLOCK_SIZE) {
         blockwalk_read_next(&wsrc, &tmp);
@@ -277,8 +298,8 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     /* L = K_ECB */
     l = ctx->key_ecb;
 
-    blockwalk_start(&wsrc, EME2_BLOCK_SIZE, dst, nbytes - extra_bytes);
-    blockwalk_start(&wdst, EME2_BLOCK_SIZE, dst, nbytes - extra_bytes);
+    blockwalk_start(&wsrc, 0, EME2_BLOCK_SIZE, dst, nbytes - extra_bytes);
+    blockwalk_start(&wdst, 1, EME2_BLOCK_SIZE, dst, nbytes - extra_bytes);
 
     /* skip the first block, will be written later: */
     blockwalk_skip_next(&wsrc);
@@ -325,7 +346,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     be128_xor(&ccc1, &ccc1, &ctx->key_ecb);
 
     /* write C_1, which we skipped before: */
-    blockwalk_start(&wdst, EME2_BLOCK_SIZE, dst, EME2_BLOCK_SIZE);
+    blockwalk_start(&wdst, 1, EME2_BLOCK_SIZE, dst, EME2_BLOCK_SIZE);
     blockwalk_write_next(&wdst, &ccc1);
     return 0;
 }
