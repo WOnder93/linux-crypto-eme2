@@ -332,7 +332,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     /* L = K_ECB */
     l = ctx->key_ecb;
 
-    blockwalk_start(&walk, dst, dst, nbytes - extra_bytes,
+    blockwalk_start(&walk, src, dst, nbytes - extra_bytes,
                     ctx->buffer, ctx->buffer_size);
 
     /* skip the first block, will be written later: */
