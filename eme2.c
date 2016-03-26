@@ -251,7 +251,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
 
     avail = bufwalk_read_next(&wsrc, ctx->buffer);
     cursor = (u8 *)ctx->buffer;
-    while (avail + wsrc.bytesleft >= EME2_BLOCK_SIZE) {
+    while (avail >= EME2_BLOCK_SIZE) {
         /* PPP_j = AES-Enc(K_AES, L xor P_j) */
         be128_xor((be128 *)cursor, &l, (be128 *)cursor);
         fn(tfm, cursor, cursor);
@@ -326,7 +326,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     }
 
     j = 1;
-    while (avail + wsrc.bytesleft >= EME2_BLOCK_SIZE) {
+    while (avail != 0) {
         if (likely(j % 128 != 0)) {
             /* M = mult-by-alpha(M) */
             gf128mul_x_ble(&m, &m);
