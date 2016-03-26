@@ -132,18 +132,16 @@ static inline void blockwalk_start(
     walk->cursor = (u8 *)buffer;
 }
 
-static inline void blockwalk_next(struct blockwalk *walk)
+static inline void blockwalk_next(struct blockwalk *walk, unsigned int step)
 {
-    if (unlikely(walk->avail <= EME2_BLOCK_SIZE)) {
-        walk->avail = 0;
+    walk->avail -= step;
+    walk->cursor += step;
+    if (unlikely(walk->avail == 0)) {
         bufwalk_write_next(&walk->wdst, walk->buffer);
         if (likely(walk->wsrc.bytesleft != 0)) {
             walk->avail = bufwalk_read_next(&walk->wsrc, walk->buffer);
             walk->cursor = walk->buffer;
         }
-    } else {
-        walk->avail -= EME2_BLOCK_SIZE;
-        walk->cursor += EME2_BLOCK_SIZE;
     }
 }
 
@@ -294,7 +292,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
         /* L = mult-by-alpha(L) */
         gf128mul_x_ble(&l, &l);
 
-        blockwalk_next(&walk);
+        blockwalk_next(&walk, EME2_BLOCK_SIZE);
     }
 
     /* CCC_1 = T_star */
@@ -313,7 +311,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
         /* CCC_1 = CCC_1 xor CCC_m */
         eme2_xor_padded(&ccc1, walk.cursor, extra_bytes);
 
-        blockwalk_next(&walk);
+        blockwalk_next(&walk, extra_bytes);
 
         /* MC = MC_1 = AES-Enc(K_AES, MM) */
         fn(tfm, (u8 *)&mc, (u8 *)&mc);
@@ -336,7 +334,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
                     ctx->buffer, ctx->buffer_size);
 
     /* skip the first block, will be written later: */
-    blockwalk_next(&walk);
+    blockwalk_next(&walk, EME2_BLOCK_SIZE);
 
     j = 1;
     while (walk.avail >= EME2_BLOCK_SIZE) {
@@ -368,7 +366,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
         gf128mul_x_ble(&l, &l);
         be128_xor((be128 *)walk.cursor, (be128 *)walk.cursor, &l);
 
-        blockwalk_next(&walk);
+        blockwalk_next(&walk, EME2_BLOCK_SIZE);
     }
 
     /* C_1 = AES-Enc(K_AES, CCC_1) xor L */
