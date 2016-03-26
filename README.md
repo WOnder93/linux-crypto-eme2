@@ -8,6 +8,8 @@ To build the EME2 module, you need to have the header files for the Linux kernel
 
 ## Installing
 
+**WARNING**: This module is still in development and may crash or break your machine! It is highly recommended that you only use it inside a virtual machine.
+
 ```bash
 sudo modprobe gf128mul && sudo insmod eme2_module.ko
 ```
@@ -17,6 +19,8 @@ To reinstall, run:
 ```bash
 sudo rmmod eme2_module && sudo insmod eme2_module.ko
 ```
+
+To see if the tests passed, run `dmesg | less +G`.
 
 ## Using with Cryptsetup
 
