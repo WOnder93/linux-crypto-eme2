@@ -134,16 +134,15 @@ static inline void blockwalk_start(
 
 static inline void blockwalk_next(struct blockwalk *walk)
 {
-    if (unlikely(walk->avail <= EME2_BLOCK_SIZE)) {
-        walk->avail = 0;
+    unsigned int chunk = min(walk->avail, (unsigned int)EME2_BLOCK_SIZE);
+    walk->avail -= chunk;
+    walk->cursor += chunk;
+    if (unlikely(walk->avail == 0)) {
         bufwalk_write_next(&walk->wdst, walk->buffer);
         if (likely(walk->wsrc.bytesleft != 0)) {
             walk->avail = bufwalk_read_next(&walk->wsrc, walk->buffer);
             walk->cursor = walk->buffer;
         }
-    } else {
-        walk->avail -= EME2_BLOCK_SIZE;
-        walk->cursor += EME2_BLOCK_SIZE;
     }
 }
 
