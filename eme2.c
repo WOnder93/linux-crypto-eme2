@@ -126,7 +126,7 @@ static inline void blockwalk_start(
     BUG_ON(bufsize < EME2_BLOCK_SIZE || bufsize % EME2_BLOCK_SIZE != 0);
 
     bufwalk_start(&walk->wsrc, 0, bufsize, src, nbytes);
-    bufwalk_start(&walk->wdst, 1, bufsize, dst, nbytes);
+    bufwalk_start(&walk->wdst, 1, bufsize, src, nbytes);
     walk->buffer = (u8 *)buffer;
     walk->avail = bufwalk_read_next(&walk->wsrc, buffer);
     walk->cursor = (u8 *)buffer;
