@@ -1,11 +1,21 @@
 #!/bin/bash
 
+run_benchmark() {
+    ALG=$1
+    KEYSIZE=$2
+
+    # warm-up:
+    /sbin/cryptsetup benchmark -c $ALG -s $KEYSIZE > /dev/null
+    # now for real:
+    /sbin/cryptsetup benchmark -c $ALG -s $KEYSIZE | grep $ALG
+}
+
 make || exit 1
 
-(sudo rmmod eme2_module 2>/dev/null || sudo modprobe gf128mul) && sudo insmod eme2_module.ko
+(sudo rmmod eme2_module 2>/dev/null || sudo modprobe gf128mul) && sudo insmod eme2_module.ko || exit 1
 
-/sbin/cryptsetup benchmark -c aes-eme2 -s 384
-/sbin/cryptsetup benchmark -c aes-eme2 -s 512
-/sbin/cryptsetup benchmark -c aes-xts  -s 256
-/sbin/cryptsetup benchmark -c aes-xts  -s 384
-/sbin/cryptsetup benchmark -c aes-xts  -s 512
+run_benchmark aes-eme2 384
+run_benchmark aes-eme2 512
+run_benchmark aes-xts  256
+run_benchmark aes-xts  384
+run_benchmark aes-xts  512
