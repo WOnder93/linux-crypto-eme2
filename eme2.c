@@ -276,8 +276,8 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     /* L = K_ECB */
     l = ctx->key_ecb;
 
-    bufwalk_start(&wsrc, 0, ctx->buffer_size, src, nbytes - extra_bytes);
-    bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes - extra_bytes);
+    bufwalk_start(&wsrc, 0, ctx->buffer_size, src, nbytes);
+    bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes);
 
     avail = bufwalk_read_next(&wsrc, ctx->buffer);
     cursor = (u8 *)ctx->buffer;
@@ -298,14 +298,17 @@ static int eme2_crypt(struct eme2_ctx *ctx,
             }
         }
     }
+    if (unlikely(avail != 0)) {
+        bufwalk_write_next(&wdst, ctx->buffer);
+    }
 
     /* PPP_j = AES-Enc(K_AES, P_j') */
-    ecb_fn(&desc, dst, src, nbytes - extra_bytes);
+    ecb_fn(&desc, dst, dst, nbytes - extra_bytes);
 
     /* MP = T_star xor [PPP_1 ... PPP_m] */
     mp = t_star;
 
-    bufwalk_start(&wsrc, 0, ctx->buffer_size, src, nbytes);
+    bufwalk_start(&wsrc, 0, ctx->buffer_size, dst, nbytes);
     bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes);
 
     avail = bufwalk_read_next(&wsrc, ctx->buffer);
@@ -413,7 +416,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     bufwalk_write_next(&wdst, &ccc1);
 
     /* C_j' = AES-Enc(K_AES, CCC_j) */
-    ecb_fn(&desc, dst, src, nbytes - extra_bytes);
+    ecb_fn(&desc, dst, dst, nbytes - extra_bytes);
 
     /* L = K_ECB */
     l = ctx->key_ecb;
