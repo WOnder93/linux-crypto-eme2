@@ -29,6 +29,11 @@
 /* the size of auxiliary buffer: */
 #define EME2_AUX_BUFFER_SIZE PAGE_SIZE
 
+typedef void (*eme2_crypt_fn)(struct crypto_cipher *, u8 *, const u8 *);
+typedef int  (*eme2_crypt_ecb_fn)(
+        struct blkcipher_desc *, struct scatterlist *, struct scatterlist *,
+        unsigned int);
+
 struct bufwalk {
     int out;
     unsigned int bufsize;
@@ -120,6 +125,7 @@ static int setkey(struct crypto_tfm *parent, const u8 *key, unsigned int keylen)
 
     struct eme2_ctx *ctx = crypto_tfm_ctx(parent);
     struct crypto_cipher *child = ctx->child;
+    struct crypto_blkcipher *child_ecb = ctx->child_ecb;
     u32 *flags = &parent->crt_flags;
     int err;
 
@@ -137,7 +143,17 @@ static int setkey(struct crypto_tfm *parent, const u8 *key, unsigned int keylen)
     if (err)
         return err;
 
-    crypto_tfm_set_flags(parent, crypto_cipher_get_flags(child) &
+    crypto_tfm_set_flags(parent, crypto_blkcipher_get_flags(child_ecb) &
+                         CRYPTO_TFM_RES_MASK);
+
+    crypto_blkcipher_clear_flags(child_ecb, CRYPTO_TFM_REQ_MASK);
+    crypto_blkcipher_set_flags(child_ecb, crypto_tfm_get_flags(parent) &
+                               CRYPTO_TFM_REQ_MASK);
+    err = crypto_blkcipher_setkey(child_ecb, key_aes, key_aes_len);
+    if (err)
+        return err;
+
+    crypto_tfm_set_flags(parent, crypto_blkcipher_get_flags(child_ecb) &
                          CRYPTO_TFM_RES_MASK);
 
     /* copy the "associated data" and "ECB pass" keys into context: */
@@ -222,15 +238,19 @@ static inline void eme2_process_assoc_data(
 static int eme2_crypt(struct eme2_ctx *ctx,
                       struct scatterlist *dst, struct scatterlist *src,
                       unsigned int nbytes, const u8 *iv, unsigned int ivsize,
-                      void (*fn)(struct crypto_tfm *, u8 *, const u8 *))
+                      eme2_crypt_fn fn, eme2_crypt_ecb_fn ecb_fn)
 {
-    struct crypto_tfm *tfm = crypto_cipher_tfm(ctx->child);
+    struct blkcipher_desc desc;
 
     struct bufwalk wsrc, wdst;
 
     unsigned int j, avail, extra_bytes = nbytes % EME2_BLOCK_SIZE;
     be128 t_star, l, mp, mc, m1, m, ccc1;
     u8 *cursor;
+
+    desc.flags = 0;
+    desc.info = NULL;
+    desc.tfm = ctx->child_ecb;
 
     /* input must be at least one block: */
     if (unlikely(nbytes < EME2_BLOCK_SIZE)) {
@@ -241,10 +261,37 @@ static int eme2_crypt(struct eme2_ctx *ctx,
 
     eme2_process_assoc_data(ctx, &t_star, iv, ivsize);
 
-    /* MP = T_star xor [PPP_1 ... PPP_m] */
-    mp = t_star;
     /* L = K_ECB */
     l = ctx->key_ecb;
+
+    bufwalk_start(&wsrc, 0, ctx->buffer_size, src, nbytes - extra_bytes);
+    bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes - extra_bytes);
+
+    avail = bufwalk_read_next(&wsrc, ctx->buffer);
+    cursor = (u8 *)ctx->buffer;
+    while (avail >= EME2_BLOCK_SIZE) {
+        /* P_j' = L xor P_j */
+        be128_xor((be128 *)cursor, &l, (be128 *)cursor);
+
+        /* L = mult-by-alpha(L) */
+        gf128mul_x_ble(&l, &l);
+
+        avail -= EME2_BLOCK_SIZE;
+        cursor += EME2_BLOCK_SIZE;
+        if (unlikely(avail == 0)) {
+            bufwalk_write_next(&wdst, ctx->buffer);
+            if (likely(wsrc.bytesleft != 0)) {
+                avail = bufwalk_read_next(&wsrc, ctx->buffer);
+                cursor = (u8 *)ctx->buffer;
+            }
+        }
+    }
+
+    /* PPP_j = AES-Enc(K_AES, P_j') */
+    ecb_fn(&desc, dst, src, nbytes - extra_bytes);
+
+    /* MP = T_star xor [PPP_1 ... PPP_m] */
+    mp = t_star;
 
     bufwalk_start(&wsrc, 0, ctx->buffer_size, src, nbytes);
     bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes);
@@ -252,14 +299,8 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     avail = bufwalk_read_next(&wsrc, ctx->buffer);
     cursor = (u8 *)ctx->buffer;
     while (avail >= EME2_BLOCK_SIZE) {
-        /* PPP_j = AES-Enc(K_AES, L xor P_j) */
-        be128_xor((be128 *)cursor, &l, (be128 *)cursor);
-        fn(tfm, cursor, cursor);
         /* MP = MP xor PPP_j */
         be128_xor(&mp, &mp, (be128 *)cursor);
-
-        /* L = mult-by-alpha(L) */
-        gf128mul_x_ble(&l, &l);
 
         avail -= EME2_BLOCK_SIZE;
         cursor += EME2_BLOCK_SIZE;
@@ -280,7 +321,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
         eme2_xor_padded(&mp, cursor, extra_bytes);
 
         /* MM = AES-Enc(K_AES, MP) */
-        fn(tfm, (u8 *)&mc, (u8 *)&mp);
+        fn(ctx->child, (u8 *)&mc, (u8 *)&mp);
 
         /* C_m = P_m xor MM [truncated] */
         crypto_xor(cursor, (u8 *)&mc, extra_bytes);
@@ -291,10 +332,10 @@ static int eme2_crypt(struct eme2_ctx *ctx,
         eme2_xor_padded(&ccc1, cursor, extra_bytes);
 
         /* MC = MC_1 = AES-Enc(K_AES, MM) */
-        fn(tfm, (u8 *)&mc, (u8 *)&mc);
+        fn(ctx->child, (u8 *)&mc, (u8 *)&mc);
     } else {
         /* MC = MC_1 = AES-Enc(K_AES, MP) */
-        fn(tfm, (u8 *)&mc, (u8 *)&mp);
+        fn(ctx->child, (u8 *)&mc, (u8 *)&mp);
     }
 
     /* M = M_1 = MP xor MC */
@@ -303,9 +344,6 @@ static int eme2_crypt(struct eme2_ctx *ctx,
 
     /* CCC_1 = CCC_1 xor MC */
     be128_xor(&ccc1, &ccc1, &mc);
-
-    /* L = K_ECB */
-    l = ctx->key_ecb;
 
     bufwalk_start(&wsrc, 0, ctx->buffer_size, dst, nbytes - extra_bytes);
     bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes - extra_bytes);
@@ -337,7 +375,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
             /* MP = PPP_j xor M_1 */
             be128_xor(&mp, (be128 *)cursor, &m1);
             /* MC = AES-Enc(K_AES, MP) */
-            fn(tfm, (u8 *)&mc, (u8 *)&mp);
+            fn(ctx->child, (u8 *)&mc, (u8 *)&mp);
             /* M = MP xor MC */
             be128_xor(&m, &mp, &mc);
             /* CCC_j = MC xor M_1 */
@@ -345,15 +383,6 @@ static int eme2_crypt(struct eme2_ctx *ctx,
         }
         /* CCC_1 = CCC_1 xor CCC_j */
         be128_xor(&ccc1, &ccc1, (be128 *)cursor);
-
-        /* multiply L before, since we start with second block and we
-         * want to avoid unnecessary operation in the last iteration */
-
-        /* L = mult-by-alpha(L) */
-        /* C_j = AES-Enc(K_AES, CCC_j) xor L */
-        fn(tfm, cursor, cursor);
-        gf128mul_x_ble(&l, &l);
-        be128_xor((be128 *)cursor, (be128 *)cursor, &l);
 
         ++j;
         avail -= EME2_BLOCK_SIZE;
@@ -367,13 +396,38 @@ static int eme2_crypt(struct eme2_ctx *ctx,
         }
     }
 
-    /* C_1 = AES-Enc(K_AES, CCC_1) xor L */
-    fn(tfm, (u8 *)&ccc1, (u8 *)&ccc1);
-    be128_xor(&ccc1, &ccc1, &ctx->key_ecb);
-
-    /* write C_1, which we skipped before: */
+    /* write CCC_1, which we skipped before: */
     bufwalk_start(&wdst, 1, EME2_BLOCK_SIZE, dst, EME2_BLOCK_SIZE);
     bufwalk_write_next(&wdst, &ccc1);
+
+    /* C_j' = AES-Enc(K_AES, CCC_j) */
+    ecb_fn(&desc, dst, src, nbytes - extra_bytes);
+
+    /* L = K_ECB */
+    l = ctx->key_ecb;
+
+    bufwalk_start(&wsrc, 0, ctx->buffer_size, dst, nbytes - extra_bytes);
+    bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes - extra_bytes);
+
+    avail = bufwalk_read_next(&wsrc, ctx->buffer);
+    cursor = (u8 *)ctx->buffer;
+
+    while (avail != 0) {
+        /* C_j = C_j' xor L */
+        /* L = mult-by-alpha(L) */
+        be128_xor((be128 *)cursor, (be128 *)cursor, &l);
+        gf128mul_x_ble(&l, &l);
+
+        avail -= EME2_BLOCK_SIZE;
+        cursor += EME2_BLOCK_SIZE;
+        if (unlikely(avail == 0)) {
+            bufwalk_write_next(&wdst, ctx->buffer);
+            if (likely(wsrc.bytesleft != 0)) {
+                avail = bufwalk_read_next(&wsrc, ctx->buffer);
+                cursor = (u8 *)ctx->buffer;
+            }
+        }
+    }
     return 0;
 }
 
@@ -382,7 +436,7 @@ int eme2_encrypt(struct eme2_ctx *ctx,
                  unsigned int nbytes, const u8 *iv, unsigned int ivsize)
 {
     return eme2_crypt(ctx, dst, src, nbytes, iv, ivsize,
-                      crypto_cipher_alg(ctx->child)->cia_encrypt);
+                      &crypto_cipher_encrypt_one, &crypto_blkcipher_encrypt);
 }
 EXPORT_SYMBOL_GPL(eme2_encrypt);
 
@@ -391,7 +445,7 @@ int eme2_decrypt(struct eme2_ctx *ctx,
                  unsigned int nbytes, const u8 *iv, unsigned int ivsize)
 {
     return eme2_crypt(ctx, dst, src, nbytes, iv, ivsize,
-                      crypto_cipher_alg(ctx->child)->cia_decrypt);
+                      &crypto_cipher_decrypt_one, &crypto_blkcipher_decrypt);
 }
 EXPORT_SYMBOL_GPL(eme2_decrypt);
 
@@ -401,7 +455,7 @@ static int encrypt(struct blkcipher_desc *desc, struct scatterlist *dst,
     struct eme2_ctx *ctx = crypto_blkcipher_ctx(desc->tfm);
     unsigned int ivsize = crypto_blkcipher_ivsize(desc->tfm);
     return eme2_crypt(ctx, dst, src, nbytes, (const u8 *)desc->info, ivsize,
-                      crypto_cipher_alg(ctx->child)->cia_encrypt);
+                      &crypto_cipher_encrypt_one, &crypto_blkcipher_encrypt);
 }
 
 static int decrypt(struct blkcipher_desc *desc, struct scatterlist *dst,
@@ -410,17 +464,20 @@ static int decrypt(struct blkcipher_desc *desc, struct scatterlist *dst,
     struct eme2_ctx *ctx = crypto_blkcipher_ctx(desc->tfm);
     unsigned int ivsize = crypto_blkcipher_ivsize(desc->tfm);
     return eme2_crypt(ctx, dst, src, nbytes, (const u8 *)desc->info, ivsize,
-                      crypto_cipher_alg(ctx->child)->cia_decrypt);
+                      &crypto_cipher_decrypt_one, &crypto_blkcipher_decrypt);
 }
 
 static int init_tfm(struct crypto_tfm *tfm)
 {
+    struct crypto_alg *alg;
     struct crypto_cipher *cipher;
+    struct crypto_blkcipher *cipher_ecb;
     struct crypto_instance *inst = (void *)tfm->__crt_alg;
     struct crypto_spawn *spawn = crypto_instance_ctx(inst);
     struct eme2_ctx *ctx = crypto_tfm_ctx(tfm);
     u32 *flags = &tfm->crt_flags;
     void *buffer;
+    char ecb_name[CRYPTO_MAX_ALG_NAME];
 
     cipher = crypto_spawn_cipher(spawn);
     if (IS_ERR(cipher))
@@ -432,13 +489,25 @@ static int init_tfm(struct crypto_tfm *tfm)
         return -EINVAL;
     }
 
+    /* this feels hacky: */
+    alg = cipher->base.__crt_alg;
+    snprintf(ecb_name, sizeof(ecb_name), "ecb(%s)", alg->cra_name);
+    cipher_ecb = crypto_alloc_blkcipher(ecb_name, 0, 0);
+    if (IS_ERR(cipher_ecb)) {
+        crypto_free_cipher(cipher);
+        return -ENOENT;
+    }
+
+
     buffer = kmalloc(EME2_AUX_BUFFER_SIZE, GFP_KERNEL);
     if (!buffer) {
+        crypto_free_blkcipher(cipher_ecb);
         crypto_free_cipher(cipher);
         return -ENOMEM;
     }
 
     ctx->child = cipher;
+    ctx->child_ecb = cipher_ecb;
     ctx->buffer = buffer;
     ctx->buffer_size = EME2_AUX_BUFFER_SIZE;
     return 0;
@@ -448,6 +517,7 @@ static void exit_tfm(struct crypto_tfm *tfm)
 {
     struct eme2_ctx *ctx = crypto_tfm_ctx(tfm);
     crypto_free_cipher(ctx->child);
+    crypto_free_blkcipher(ctx->child_ecb);
     kfree(ctx->buffer);
     /* clear the xor keys: */
     memzero_explicit(&ctx->key_ad,  sizeof(ctx->key_ad));

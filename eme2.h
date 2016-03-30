@@ -7,7 +7,9 @@
 #define EME2_BLOCK_SIZE 16
 
 struct eme2_ctx {
-    struct crypto_cipher *child;    /* the underlyiing block cipher */
+    struct crypto_cipher *child;    /* the underlying cipher */
+    struct crypto_blkcipher *child_ecb;
+                                    /* the underlying cipher in ECB mode */
 
     void *buffer;                   /* auxiliary buffer */
     unsigned int buffer_size;       /* aux. buffer size */
