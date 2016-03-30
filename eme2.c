@@ -27,7 +27,8 @@
 #include <crypto/scatterwalk.h>
 
 /* the size of auxiliary buffer: */
-#define EME2_AUX_BUFFER_SIZE PAGE_SIZE
+#define EME2_AUX_BUFFER_PAGES 1
+#define EME2_AUX_BUFFER_SIZE (EME2_AUX_BUFFER_PAGES * PAGE_SIZE)
 
 struct eme2_ctx {
    struct crypto_cipher *child;    /* the underlying cipher */
@@ -36,6 +37,8 @@ struct eme2_ctx {
 
    void *buffer;                   /* auxiliary buffer */
    unsigned int buffer_size;       /* aux. buffer size */
+
+   struct scatterlist buffer_sg[EME2_AUX_BUFFER_PAGES];
 
    be128 key_ad;                   /* K_AD  - the associated data key */
    be128 key_ecb;                  /* K_ECB - the ECB pass key */
@@ -256,7 +259,7 @@ static int eme2_crypt(struct eme2_ctx *ctx,
 
     struct bufwalk wsrc, wdst;
 
-    unsigned int j, avail, extra_bytes = nbytes % EME2_BLOCK_SIZE;
+    unsigned int j, size, avail, extra_bytes = nbytes % EME2_BLOCK_SIZE;
     be128 t_star, l, mp, mc, m1, m, ccc1;
     u8 *cursor;
 
@@ -273,57 +276,46 @@ static int eme2_crypt(struct eme2_ctx *ctx,
 
     eme2_process_assoc_data(ctx, &t_star, iv, ivsize);
 
-    /* L = K_ECB */
-    l = ctx->key_ecb;
-
-    bufwalk_start(&wsrc, 0, ctx->buffer_size, src, nbytes - extra_bytes);
-    bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes - extra_bytes);
-
-    avail = bufwalk_read_next(&wsrc, ctx->buffer);
-    cursor = (u8 *)ctx->buffer;
-    while (avail >= EME2_BLOCK_SIZE) {
-        /* P_j' = L xor P_j */
-        be128_xor((be128 *)cursor, &l, (be128 *)cursor);
-
-        /* L = mult-by-alpha(L) */
-        gf128mul_x_ble(&l, &l);
-
-        avail -= EME2_BLOCK_SIZE;
-        cursor += EME2_BLOCK_SIZE;
-        if (unlikely(avail == 0)) {
-            bufwalk_write_next(&wdst, ctx->buffer);
-            if (likely(wsrc.bytesleft != 0)) {
-                avail = bufwalk_read_next(&wsrc, ctx->buffer);
-                cursor = (u8 *)ctx->buffer;
-            }
-        }
-    }
-
-    /* PPP_j = AES-Enc(K_AES, P_j') */
-    ecb_fn(&desc, dst, src, nbytes - extra_bytes);
-
     /* MP = T_star xor [PPP_1 ... PPP_m] */
     mp = t_star;
+    /* L = K_ECB */
+    l = ctx->key_ecb;
 
     bufwalk_start(&wsrc, 0, ctx->buffer_size, src, nbytes);
     bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes);
 
-    avail = bufwalk_read_next(&wsrc, ctx->buffer);
-    cursor = (u8 *)ctx->buffer;
-    while (avail >= EME2_BLOCK_SIZE) {
-        /* MP = MP xor PPP_j */
-        be128_xor(&mp, &mp, (be128 *)cursor);
+    do {
+        size = bufwalk_read_next(&wsrc, ctx->buffer);
 
-        avail -= EME2_BLOCK_SIZE;
-        cursor += EME2_BLOCK_SIZE;
-        if (unlikely(avail == 0)) {
-            bufwalk_write_next(&wdst, ctx->buffer);
-            if (likely(wsrc.bytesleft != 0)) {
-                avail = bufwalk_read_next(&wsrc, ctx->buffer);
-                cursor = (u8 *)ctx->buffer;
-            }
+        avail = size;
+        cursor = (u8 *)ctx->buffer;
+        while (avail >= EME2_BLOCK_SIZE) {
+            /* P_j' = L xor P_j */
+            be128_xor((be128 *)cursor, &l, (be128 *)cursor);
+
+            /* L = mult-by-alpha(L) */
+            gf128mul_x_ble(&l, &l);
+
+            avail -= EME2_BLOCK_SIZE;
+            cursor += EME2_BLOCK_SIZE;
         }
-    }
+
+        /* PPP_j = AES-Enc(K_AES, P_j') */
+        ecb_fn(&desc, ctx->buffer_sg, ctx->buffer_sg, size);
+
+        avail = size;
+        cursor = (u8 *)ctx->buffer;
+        while (avail >= EME2_BLOCK_SIZE) {
+            /* MP = MP xor PPP_j */
+            be128_xor(&mp, &mp, (be128 *)cursor);
+
+            avail -= EME2_BLOCK_SIZE;
+            cursor += EME2_BLOCK_SIZE;
+        }
+
+        if (avail == 0)
+            bufwalk_write_next(&wdst, ctx->buffer);
+    } while (wsrc.bytesleft != 0);
 
     /* CCC_1 = T_star */
     ccc1 = t_star;
@@ -357,89 +349,69 @@ static int eme2_crypt(struct eme2_ctx *ctx,
     /* CCC_1 = CCC_1 xor MC */
     be128_xor(&ccc1, &ccc1, &mc);
 
-    bufwalk_start(&wsrc, 0, ctx->buffer_size, dst, nbytes - extra_bytes);
-    bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes - extra_bytes);
-
-    avail = bufwalk_read_next(&wsrc, ctx->buffer);
-    cursor = (u8 *)ctx->buffer;
-
-    /* skip the first block, will be written later: */
-    cursor += EME2_BLOCK_SIZE;
-    avail -= EME2_BLOCK_SIZE;
-
-    if (unlikely(avail == 0)) {
-        bufwalk_skip_next(&wdst);
-        if (likely(wsrc.bytesleft != 0)) {
-            avail = bufwalk_read_next(&wsrc, ctx->buffer);
-            cursor = (u8 *)ctx->buffer;
-        }
-    }
-
-    j = 1;
-    while (avail != 0) {
-        if (likely(j % 128 != 0)) {
-            /* M = mult-by-alpha(M) */
-            gf128mul_x_ble(&m, &m);
-
-            /* CCC_j = PPP_j xor M */
-            be128_xor((be128 *)cursor, (be128 *)cursor, &m);
-        } else {
-            /* MP = PPP_j xor M_1 */
-            be128_xor(&mp, (be128 *)cursor, &m1);
-            /* MC = AES-Enc(K_AES, MP) */
-            fn(ctx->child, (u8 *)&mc, (u8 *)&mp);
-            /* M = MP xor MC */
-            be128_xor(&m, &mp, &mc);
-            /* CCC_j = MC xor M_1 */
-            be128_xor((be128 *)cursor, &mc, &m1);
-        }
-        /* CCC_1 = CCC_1 xor CCC_j */
-        be128_xor(&ccc1, &ccc1, (be128 *)cursor);
-
-        ++j;
-        avail -= EME2_BLOCK_SIZE;
-        cursor += EME2_BLOCK_SIZE;
-        if (unlikely(avail == 0)) {
-            bufwalk_write_next(&wdst, ctx->buffer);
-            if (likely(wsrc.bytesleft != 0)) {
-                avail = bufwalk_read_next(&wsrc, ctx->buffer);
-                cursor = (u8 *)ctx->buffer;
-            }
-        }
-    }
-
-    /* write CCC_1, which we skipped before: */
-    bufwalk_start(&wdst, 1, EME2_BLOCK_SIZE, dst, EME2_BLOCK_SIZE);
-    bufwalk_write_next(&wdst, &ccc1);
-
-    /* C_j' = AES-Enc(K_AES, CCC_j) */
-    ecb_fn(&desc, dst, src, nbytes - extra_bytes);
-
     /* L = K_ECB */
     l = ctx->key_ecb;
 
     bufwalk_start(&wsrc, 0, ctx->buffer_size, dst, nbytes - extra_bytes);
     bufwalk_start(&wdst, 1, ctx->buffer_size, dst, nbytes - extra_bytes);
 
-    avail = bufwalk_read_next(&wsrc, ctx->buffer);
-    cursor = (u8 *)ctx->buffer;
+    j = 0;
+    do {
+        size = bufwalk_read_next(&wsrc, ctx->buffer);
 
-    while (avail != 0) {
-        /* C_j = C_j' xor L */
-        /* L = mult-by-alpha(L) */
-        be128_xor((be128 *)cursor, (be128 *)cursor, &l);
-        gf128mul_x_ble(&l, &l);
+        avail = size;
+        cursor = (u8 *)ctx->buffer;
+        while (avail >= EME2_BLOCK_SIZE) {
+            /* skip the first block: */
+            if (likely(j != 0)) {
+                if (likely(j % 128 != 0)) {
+                    /* M = mult-by-alpha(M) */
+                    gf128mul_x_ble(&m, &m);
 
-        avail -= EME2_BLOCK_SIZE;
-        cursor += EME2_BLOCK_SIZE;
-        if (unlikely(avail == 0)) {
-            bufwalk_write_next(&wdst, ctx->buffer);
-            if (likely(wsrc.bytesleft != 0)) {
-                avail = bufwalk_read_next(&wsrc, ctx->buffer);
-                cursor = (u8 *)ctx->buffer;
+                    /* CCC_j = PPP_j xor M */
+                    be128_xor((be128 *)cursor, (be128 *)cursor, &m);
+                } else {
+                    /* MP = PPP_j xor M_1 */
+                    be128_xor(&mp, (be128 *)cursor, &m1);
+                    /* MC = AES-Enc(K_AES, MP) */
+                    fn(ctx->child, (u8 *)&mc, (u8 *)&mp);
+                    /* M = MP xor MC */
+                    be128_xor(&m, &mp, &mc);
+                    /* CCC_j = MC xor M_1 */
+                    be128_xor((be128 *)cursor, &mc, &m1);
+                }
+                /* CCC_1 = CCC_1 xor CCC_j */
+                be128_xor(&ccc1, &ccc1, (be128 *)cursor);
             }
+
+            ++j;
+            avail -= EME2_BLOCK_SIZE;
+            cursor += EME2_BLOCK_SIZE;
         }
-    }
+
+        /* PPP_j = AES-Enc(K_AES, P_j') */
+        ecb_fn(&desc, ctx->buffer_sg, ctx->buffer_sg, size);
+
+        avail = size;
+        cursor = (u8 *)ctx->buffer;
+        while (avail >= EME2_BLOCK_SIZE) {
+            /* C_j = C_j' xor L */
+            /* L = mult-by-alpha(L) */
+            be128_xor((be128 *)cursor, (be128 *)cursor, &l);
+            gf128mul_x_ble(&l, &l);
+
+            avail -= EME2_BLOCK_SIZE;
+            cursor += EME2_BLOCK_SIZE;
+        }
+        bufwalk_write_next(&wdst, ctx->buffer);
+    } while (wsrc.bytesleft != 0);
+
+    /* (re)write CCC_1, which we skipped before: */
+    fn(ctx->child, (u8 *)&ccc1, (u8 *)&ccc1);
+    be128_xor(&ccc1, &ccc1, &ctx->key_ecb);
+
+    bufwalk_start(&wdst, 1, EME2_BLOCK_SIZE, dst, EME2_BLOCK_SIZE);
+    bufwalk_write_next(&wdst, &ccc1);
     return 0;
 }
 
@@ -490,6 +462,7 @@ static int init_tfm(struct crypto_tfm *tfm)
     u32 *flags = &tfm->crt_flags;
     void *buffer;
     char ecb_name[CRYPTO_MAX_ALG_NAME];
+    unsigned int i;
 
     cipher = crypto_spawn_cipher(spawn);
     if (IS_ERR(cipher))
@@ -516,6 +489,12 @@ static int init_tfm(struct crypto_tfm *tfm)
         crypto_free_blkcipher(cipher_ecb);
         crypto_free_cipher(cipher);
         return -ENOMEM;
+    }
+
+    sg_init_table(ctx->buffer_sg, EME2_AUX_BUFFER_PAGES);
+    for (i = 0; i < EME2_AUX_BUFFER_PAGES; i++) {
+        sg_set_page(&ctx->buffer_sg[i], virt_to_page((u8 *)buffer + i * PAGE_SIZE),
+                    PAGE_SIZE, 0);
     }
 
     ctx->child = cipher;
