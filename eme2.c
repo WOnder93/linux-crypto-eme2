@@ -27,8 +27,7 @@
 #include <crypto/scatterwalk.h>
 
 /* the size of auxiliary buffer: */
-#define EME2_AUX_BUFFER_PAGES 1
-#define EME2_AUX_BUFFER_SIZE (EME2_AUX_BUFFER_PAGES * PAGE_SIZE)
+#define EME2_AUX_BUFFER_SIZE PAGE_SIZE
 
 struct eme2_ctx {
    struct crypto_cipher *child;    /* the underlying cipher */
@@ -38,7 +37,7 @@ struct eme2_ctx {
    void *buffer;                   /* auxiliary buffer */
    unsigned int buffer_size;       /* aux. buffer size */
 
-   struct scatterlist buffer_sg[EME2_AUX_BUFFER_PAGES];
+   struct scatterlist buffer_sg[1];
 
    be128 key_ad;                   /* K_AD  - the associated data key */
    be128 key_ecb;                  /* K_ECB - the ECB pass key */
@@ -462,7 +461,6 @@ static int init_tfm(struct crypto_tfm *tfm)
     u32 *flags = &tfm->crt_flags;
     void *buffer;
     char ecb_name[CRYPTO_MAX_ALG_NAME];
-    unsigned int i;
 
     cipher = crypto_spawn_cipher(spawn);
     if (IS_ERR(cipher))
@@ -491,11 +489,7 @@ static int init_tfm(struct crypto_tfm *tfm)
         return -ENOMEM;
     }
 
-    sg_init_table(ctx->buffer_sg, EME2_AUX_BUFFER_PAGES);
-    for (i = 0; i < EME2_AUX_BUFFER_PAGES; i++) {
-        sg_set_page(&ctx->buffer_sg[i], virt_to_page((u8 *)buffer + i * PAGE_SIZE),
-                    PAGE_SIZE, 0);
-    }
+    sg_init_one(ctx->buffer_sg, buffer, EME2_AUX_BUFFER_SIZE);
 
     ctx->child = cipher;
     ctx->child_ecb = cipher_ecb;
