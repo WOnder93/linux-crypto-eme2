@@ -31,8 +31,6 @@
 
 struct eme2_ctx {
    struct crypto_cipher *child;    /* the underlying cipher */
-   struct crypto_blkcipher *child_ecb;
-                                   /* the underlying cipher in ECB mode */
 
    void *buffer;                   /* auxiliary buffer */
    unsigned int buffer_size;       /* aux. buffer size */
@@ -44,9 +42,6 @@ struct eme2_ctx {
 };
 
 typedef void (*eme2_crypt_fn)(struct crypto_cipher *, u8 *, const u8 *);
-typedef int  (*eme2_crypt_ecb_fn)(
-        struct blkcipher_desc *, struct scatterlist *, struct scatterlist *,
-        unsigned int);
 
 struct bufwalk {
     int out;
