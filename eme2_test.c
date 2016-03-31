@@ -21,35 +21,6 @@ const test_case_t *cases[] = {
     NULL
 };
 
-static struct scatterlist *sg_alloc_buffer(const void *buf, unsigned int len)
-{
-    unsigned int offset = offset_in_page(buf);
-    unsigned int pages = (len + offset) / PAGE_SIZE + ((len + offset) % PAGE_SIZE != 0);
-    struct scatterlist *res = NULL;
-    struct scatterlist *sg;
-    void *pg;
-    unsigned int size;
-
-    res = kmalloc_array(pages, sizeof(struct scatterlist), GFP_KERNEL);
-    if (!res) {
-        return NULL;
-    }
-    sg_init_table(res, pages);
-
-    sg = res;
-    while (len > 0) {
-        pg = virt_to_page(buf);
-        offset = offset_in_page(buf);
-        size = min(len, (unsigned int)PAGE_SIZE - offset);
-        sg_set_page(sg, pg, size, offset);
-
-        buf = (u8 *)buf + size;
-        len -= size;
-        sg = sg_next(sg);
-    }
-    return res;
-}
-
 static int run_test_case(const test_case_t *c, unsigned int number)
 {
     int err = 0;
@@ -58,7 +29,7 @@ static int run_test_case(const test_case_t *c, unsigned int number)
     struct crypto_tfm *tfm;
     struct eme2_ctx *ctx;
     u8 *buffer = NULL;
-    struct scatterlist *sg = NULL;
+    struct scatterlist sg[1];
     struct blkcipher_desc desc;
 
     buffer = kmalloc(c->plaintext_len, GFP_KERNEL);
@@ -67,11 +38,7 @@ static int run_test_case(const test_case_t *c, unsigned int number)
         goto out;
     }
 
-    sg = sg_alloc_buffer(buffer, c->plaintext_len);
-    if (!sg) {
-        printk("eme2: tests: ERROR allocating scatterlist!\n");
-        goto out;
-    }
+    sg_init_one(sg, buffer, c->plaintext_len);
 
     cipher = crypto_alloc_blkcipher("eme2(aes)", 0, 0);
     if (IS_ERR(cipher)) {
@@ -135,8 +102,6 @@ static int run_test_case(const test_case_t *c, unsigned int number)
         }
     }
 out:
-    if (sg)
-        kfree(sg);
     if (buffer)
         kfree(buffer);
     if (cipher)
