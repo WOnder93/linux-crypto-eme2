@@ -15,6 +15,7 @@ make || exit 1
 (sudo rmmod eme2_module 2>/dev/null || sudo modprobe gf128mul) && sudo insmod eme2_module.ko || exit 1
 
 run_benchmark aes-eme2 384
+run_benchmark aes-eme2 448
 run_benchmark aes-eme2 512
 run_benchmark aes-xts  256
 run_benchmark aes-xts  384
