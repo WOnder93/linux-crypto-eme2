@@ -681,7 +681,7 @@ static struct crypto_instance *alloc(struct rtattr **tb)
 {
     struct crypto_instance *inst;
     struct eme2_instance_ctx *ctx;
-    struct crypto_alg *alg;
+    struct crypto_alg *alg, *ecb_alg;
     char ecb_name[CRYPTO_MAX_ALG_NAME];
     int err;
 
@@ -695,52 +695,56 @@ static struct crypto_instance *alloc(struct rtattr **tb)
         return ERR_CAST(alg);
 
     /* we only support 16-byte blocks: */
-    if (alg->cra_blocksize != EME2_BLOCK_SIZE) {
+    if (alg->cra_blocksize != EME2_BLOCK_SIZE)
         return ERR_PTR(-EINVAL);
-    }
 
     inst = kzalloc(sizeof(*inst) + sizeof(struct eme2_instance_ctx), GFP_KERNEL);
     if (!inst) {
         inst = ERR_PTR(-ENOMEM);
         goto out_put_alg;
     }
-
     ctx = crypto_instance_ctx(inst);
+
+    /* prepare spawn for crypto_cipher: */
     err = crypto_init_spawn(&ctx->spawn, alg, inst,
                             CRYPTO_ALG_TYPE_MASK | CRYPTO_ALG_ASYNC);
     if (err)
         goto err_free_inst;
 
-    if (snprintf(inst->alg.cra_name, CRYPTO_MAX_ALG_NAME, "eme2(%s)",
-                 alg->cra_name) >= CRYPTO_MAX_ALG_NAME) {
-        err = -ENAMETOOLONG;
+    /* prepare spawn for ECB mode: */
+    err = -ENAMETOOLONG;
+    if (snprintf(ecb_name, CRYPTO_MAX_ALG_NAME, "ecb(%s)", alg->cra_name)
+            >= CRYPTO_MAX_ALG_NAME)
         goto err_drop_spawn;
-    }
-    if (snprintf(inst->alg.cra_driver_name, CRYPTO_MAX_ALG_NAME, "eme2(%s)",
-                 alg->cra_driver_name) >= CRYPTO_MAX_ALG_NAME) {
-        err = -ENAMETOOLONG;
-        goto err_drop_spawn;
-    }
 
     crypto_set_skcipher_spawn(&ctx->ecb_spawn, inst);
-    if (snprintf(ecb_name, CRYPTO_MAX_ALG_NAME, "ecb(%s)", alg->cra_name)
-            >= CRYPTO_MAX_ALG_NAME) {
-        err = -ENAMETOOLONG;
-        goto err_drop_spawn;
-    }
     err = crypto_grab_skcipher(&ctx->ecb_spawn, ecb_name, 0, 0);
     if (err)
         goto err_drop_spawn;
 
-    inst->alg.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC;
-    inst->alg.cra_priority = alg->cra_priority;
+    /* get the crypto_alg for the ECB mode: */
+    ecb_alg = crypto_skcipher_spawn_alg(&ctx->ecb_spawn);
+
+    err = -ENAMETOOLONG;
+    if (snprintf(inst->alg.cra_name, CRYPTO_MAX_ALG_NAME, "eme2(%s)",
+                 alg->cra_name) >= CRYPTO_MAX_ALG_NAME)
+        goto err_drop_ecb_spawn;
+
+    if (snprintf(inst->alg.cra_driver_name, CRYPTO_MAX_ALG_NAME,"eme2(%s,%s)",
+                 alg->cra_driver_name, ecb_alg->cra_driver_name)
+            >= CRYPTO_MAX_ALG_NAME)
+        goto err_drop_ecb_spawn;
+
+    inst->alg.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER |
+            (ecb_alg->cra_flags & CRYPTO_ALG_ASYNC);
+    inst->alg.cra_priority = ecb_alg->cra_priority;
     inst->alg.cra_blocksize = 1;
 
-    /* not sure what to do here, leaving the code from xts.c: */
     if (alg->cra_alignmask < 7)
         inst->alg.cra_alignmask = 7;
     else
-        inst->alg.cra_alignmask = alg->cra_alignmask;
+        inst->alg.cra_alignmask =
+                max(alg->cra_alignmask, ecb_alg->cra_alignmask);
 
     inst->alg.cra_type = &crypto_ablkcipher_type;
 
@@ -765,6 +769,8 @@ out_put_alg:
     crypto_mod_put(alg);
     return inst;
 
+err_drop_ecb_spawn:
+    crypto_drop_skcipher(&ctx->ecb_spawn);
 err_drop_spawn:
     crypto_drop_spawn(&ctx->spawn);
 err_free_inst:
