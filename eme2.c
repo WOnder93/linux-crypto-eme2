@@ -115,9 +115,6 @@ typedef void (*eme2_crypt_fn)(struct crypto_cipher *, u8 *, const u8 *);
 typedef int  (*eme2_crypt_ecb_fn)(struct ablkcipher_request *req);
 
 struct eme2_req_ctx {
-    u8 buffer[EME2_AUX_BUFFER_SIZE];
-    struct scatterlist buffer_sg[1];
-
     struct ablkcipher_request* parent;
 
     eme2_crypt_fn crypt_fn;
@@ -127,6 +124,9 @@ struct eme2_req_ctx {
     unsigned int j, size;
 
     be128 l, mp, ccc1, m, m1;
+
+    struct scatterlist buffer_sg[1];
+    u8 buffer[EME2_AUX_BUFFER_SIZE] __aligned(8);
 
     struct ablkcipher_request ecb_req CRYPTO_MINALIGN_ATTR;
 };
