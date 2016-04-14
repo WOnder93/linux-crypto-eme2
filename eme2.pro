@@ -29,5 +29,6 @@ DISTFILES += \
 HEADERS += \
     eme2_tv.h \
     eme2.h \
-    eme2_test.h
+    eme2_test.h \
+    bufwalk.h
 
