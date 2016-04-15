@@ -28,7 +28,7 @@
 #include <crypto/gf128mul.h>
 #include <crypto/scatterwalk.h>
 
-/* the size of auxiliary buffer: */
+/* the size of auxiliary buffer (must be a multiple of EME2_BLOCK_SIZE): */
 #define EME2_AUX_BUFFER_SIZE PAGE_SIZE
 
 struct bufwalk {
@@ -698,7 +698,8 @@ static struct crypto_instance *alloc(struct rtattr **tb)
     if (alg->cra_blocksize != EME2_BLOCK_SIZE)
         return ERR_PTR(-EINVAL);
 
-    inst = kzalloc(sizeof(*inst) + sizeof(struct eme2_instance_ctx), GFP_KERNEL);
+    inst = kzalloc(sizeof(*inst) + sizeof(struct eme2_instance_ctx),
+                   GFP_KERNEL);
     if (!inst) {
         inst = ERR_PTR(-ENOMEM);
         goto out_put_alg;
