@@ -121,7 +121,7 @@ struct eme2_req_ctx {
     eme2_crypt_ecb_fn crypt_ecb_fn;
 
     struct bufwalk wsrc, wdst;
-    unsigned int j, size;
+    unsigned int j, size, first;
 
     be128 l, mp, ccc1, m, m1;
 
@@ -136,7 +136,9 @@ struct eme2_ctx {
    struct crypto_ablkcipher *child_ecb;
                                    /* the underlying cipher in ECB mode */
    be128 key_ad;                   /* K_AD  - the associated data key */
-   be128 key_ecb;                  /* K_ECB - the ECB pass key */
+
+   be128 l1;                       /* K_ECB - the ECB pass key */
+   be128 l0[EME2_AUX_BUFFER_SIZE / EME2_BLOCK_SIZE];
 };
 
 struct eme2_instance_ctx {
@@ -166,7 +168,7 @@ static int setkey(struct crypto_ablkcipher *cipher,
     const u8 *key_ecb = key_ad  + EME2_BLOCK_SIZE;
     const u8 *key_aes = key_ecb + EME2_BLOCK_SIZE;
 
-    unsigned int key_aes_len = keylen - 2 * EME2_BLOCK_SIZE;
+    unsigned int i, key_aes_len = keylen - 2 * EME2_BLOCK_SIZE;
 
     struct eme2_ctx *ctx = crypto_ablkcipher_ctx(cipher);
     struct crypto_cipher *child = ctx->child;
@@ -203,7 +205,14 @@ static int setkey(struct crypto_ablkcipher *cipher,
 
     /* copy the "associated data" and "ECB pass" keys into context: */
     ctx->key_ad  = *(be128 *)key_ad;
-    ctx->key_ecb = *(be128 *)key_ecb;
+
+    /* precompute a buffer of multiples of K_ECB: */
+    ctx->l1 = *(be128 *)key_ecb;
+    for (i = 0; i < ARRAY_SIZE(ctx->l0); i++) {
+        ctx->l0[i] = ctx->l1;
+
+        gf128mul_x_ble(&ctx->l1, &ctx->l1);
+    }
     return 0;
 }
 
@@ -362,7 +371,8 @@ static int eme2_crypt_start(struct eme2_req_ctx *rctx, unsigned int ivsize)
     rctx->ccc1 = rctx->mp;
 
     /* L = K_ECB */
-    rctx->l = ctx->key_ecb;
+    rctx->l = ctx->l1;
+    rctx->first = 1;
 
     bufwalk_start(&rctx->wsrc, 0, EME2_AUX_BUFFER_SIZE, req->src, req->nbytes);
     bufwalk_start(&rctx->wdst, 1, EME2_AUX_BUFFER_SIZE, req->dst, req->nbytes);
@@ -374,6 +384,8 @@ static int eme2_crypt_start(struct eme2_req_ctx *rctx, unsigned int ivsize)
 static int eme2_loop1_start(struct eme2_req_ctx *rctx)
 {
     struct ablkcipher_request *subreq = &rctx->ecb_req;
+    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(rctx->parent);
+    struct eme2_ctx *ctx = crypto_ablkcipher_ctx(tfm);
 
     unsigned int avail;
     u8 *cursor;
@@ -387,16 +399,24 @@ static int eme2_loop1_start(struct eme2_req_ctx *rctx)
     if (unlikely(rctx->size < EME2_BLOCK_SIZE)) {
         return eme2_loop1_finish(rctx, avail, cursor);
     }
-    do {
-        /* P_j' = L xor P_j */
-        be128_xor((be128 *)cursor, &rctx->l, (be128 *)cursor);
 
-        /* L = mult-by-alpha(L) */
-        gf128mul_x_ble(&rctx->l, &rctx->l);
+    if (rctx->first) {
+        rctx->first = 0;
 
-        avail -= EME2_BLOCK_SIZE;
-        cursor += EME2_BLOCK_SIZE;
-    } while (avail >= EME2_BLOCK_SIZE);
+        avail = avail % EME2_BLOCK_SIZE;
+        crypto_xor(rctx->buffer, (u8 *)ctx->l0, rctx->size - avail);
+    } else {
+        do {
+            /* P_j' = L xor P_j */
+            be128_xor((be128 *)cursor, &rctx->l, (be128 *)cursor);
+
+            /* L = mult-by-alpha(L) */
+            gf128mul_x_ble(&rctx->l, &rctx->l);
+
+            avail -= EME2_BLOCK_SIZE;
+            cursor += EME2_BLOCK_SIZE;
+        } while (avail >= EME2_BLOCK_SIZE);
+    }
 
     ablkcipher_request_set_crypt(
                 subreq, rctx->buffer_sg, rctx->buffer_sg,
@@ -474,7 +494,8 @@ static int eme2_loop1_finish(struct eme2_req_ctx *rctx,
     be128_xor(&rctx->ccc1, &rctx->ccc1, &mc);
 
     /* L = K_ECB */
-    rctx->l = ctx->key_ecb;
+    rctx->l = ctx->l1;
+    rctx->first = 1;
 
     bufwalk_start(&rctx->wsrc, 0, EME2_AUX_BUFFER_SIZE,
                   req->dst, req->nbytes - avail);
@@ -547,19 +568,27 @@ static int eme2_loop2_start(struct eme2_req_ctx *rctx)
 
 static int eme2_loop2_continue(struct eme2_req_ctx *rctx)
 {
+    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(rctx->parent);
+    struct eme2_ctx *ctx = crypto_ablkcipher_ctx(tfm);
+
     unsigned int avail;
     u8 *cursor;
 
-    avail = rctx->size;
-    cursor = (u8 *)rctx->buffer;
-    while (avail >= EME2_BLOCK_SIZE) {
-        /* C_j = C_j' xor L */
-        /* L = mult-by-alpha(L) */
-        be128_xor((be128 *)cursor, (be128 *)cursor, &rctx->l);
-        gf128mul_x_ble(&rctx->l, &rctx->l);
+    if (rctx->first) {
+        rctx->first = 0;
+        crypto_xor(rctx->buffer, (u8 *)ctx->l0, rctx->size);
+    } else {
+        avail = rctx->size;
+        cursor = (u8 *)rctx->buffer;
+        while (avail >= EME2_BLOCK_SIZE) {
+            /* C_j = C_j' xor L */
+            /* L = mult-by-alpha(L) */
+            be128_xor((be128 *)cursor, (be128 *)cursor, &rctx->l);
+            gf128mul_x_ble(&rctx->l, &rctx->l);
 
-        avail -= EME2_BLOCK_SIZE;
-        cursor += EME2_BLOCK_SIZE;
+            avail -= EME2_BLOCK_SIZE;
+            cursor += EME2_BLOCK_SIZE;
+        }
     }
     bufwalk_write_next(&rctx->wdst, rctx->buffer);
 
@@ -578,7 +607,7 @@ static int eme2_loop2_finish(struct eme2_req_ctx *rctx)
 
     /* (re)write CCC_1, which we skipped before: */
     rctx->crypt_fn(ctx->child, (u8 *)&rctx->ccc1, (u8 *)&rctx->ccc1);
-    be128_xor(&rctx->ccc1, &rctx->ccc1, &ctx->key_ecb);
+    be128_xor(&rctx->ccc1, &rctx->ccc1, &ctx->l0[0]);
 
     bufwalk_start(&rctx->wdst, 1, EME2_BLOCK_SIZE, req->dst, EME2_BLOCK_SIZE);
     bufwalk_write_next(&rctx->wdst, &rctx->ccc1);
@@ -674,7 +703,8 @@ static void exit_tfm(struct crypto_tfm *tfm)
     crypto_free_ablkcipher(ctx->child_ecb);
     /* clear the xor keys: */
     memzero_explicit(&ctx->key_ad,  sizeof(ctx->key_ad));
-    memzero_explicit(&ctx->key_ecb, sizeof(ctx->key_ecb));
+    memzero_explicit(&ctx->l1, sizeof(ctx->l1));
+    memzero_explicit(ctx->l0, sizeof(ctx->l0));
 }
 
 static struct crypto_instance *alloc(struct rtattr **tb)
