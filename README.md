@@ -24,4 +24,4 @@ To see if the tests passed, run `dmesg | less +G`.
 
 ## Using with Cryptsetup
 
-Just install the module and use `<cipher>-eme2` as the cipher spec. Note that like XTS, EME2 only works with ciphers with block size of 16 bytes (such as AES). Also note that EME2 only supports key sizes of 32 bytes + whatever the underlying block cipher supports (e. g. for AES it is 48/56/64 bytes or 384/448/512 bits).
+Just install the module and use `<cipher>-eme2` as the cipher spec. Note that like XTS, EME2 only works with ciphers with block size of 16 bytes (such as AES). Also note that EME2 only supports key sizes of 32 bytes + whatever the underlying block cipher supports (e. g. for AES it is 48 and 64 bytes or 384 and 512 bits).
