@@ -48,4 +48,4 @@ static inline void *blockwalk_chunk_out(const struct blockwalk *walk)
 
 void blockwalk_next_chunk(struct blockwalk *walk);
 
-#endif // _CRYPTO_BLOCKWALK_H
+#endif /* _CRYPTO_BLOCKWALK_H */
