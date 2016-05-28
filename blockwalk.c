@@ -31,7 +31,7 @@ void blockwalk_start(
 
     walk->mapped_in = scatterwalk_map_page(&walk->sg_in);
     walk->mapped_out = walk->mapped_in;
-    if (!scatterwalk_samepage(&walk->sg_in, &walk->sg_out)) {
+    if (unlikely(!scatterwalk_samepage(&walk->sg_in, &walk->sg_out))) {
         walk->flags |= BLOCKWALK_FLAGS_DIFF;
         walk->mapped_out = scatterwalk_map_page(&walk->sg_out);
     }
@@ -46,7 +46,7 @@ EXPORT_SYMBOL_GPL(blockwalk_start);
 static void blockwalk_advance_in(
         struct blockwalk *walk, unsigned int size, unsigned int more)
 {
-    if (!more) {
+    if (unlikely(!more)) {
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_in);
         } else {
@@ -57,7 +57,7 @@ static void blockwalk_advance_in(
 
     scatterwalk_advance(&walk->sg_in, size);
     walk->offset_in += size;
-    if (walk->offset_in >= walk->limit_in) {
+    if (unlikely(walk->offset_in >= walk->limit_in)) {
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_in);
         }
@@ -72,7 +72,7 @@ static void blockwalk_advance_in(
 static void blockwalk_advance_out(
         struct blockwalk *walk, unsigned int size, unsigned int more)
 {
-    if (!more) {
+    if (unlikely(!more)) {
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_out);
         } else {
@@ -83,7 +83,7 @@ static void blockwalk_advance_out(
 
     scatterwalk_advance(&walk->sg_out, size);
     walk->offset_out += size;
-    if (walk->offset_out >= walk->limit_out) {
+    if (unlikely(walk->offset_out >= walk->limit_out)) {
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_out);
         }
@@ -106,11 +106,11 @@ void blockwalk_next_chunk(struct blockwalk *walk)
     u8 *tmp;
 
     // advance the buffers if in direct mode:
-    if (unlikely(walk->flags & BLOCKWALK_FLAGS_DIRECT_IN)) {
+    if (likely(walk->flags & BLOCKWALK_FLAGS_DIRECT_IN)) {
         blockwalk_advance_in(walk, walk->chunk_size, walk->bytesleft);
     }
 
-    if (unlikely(walk->flags & BLOCKWALK_FLAGS_DIRECT_OUT)) {
+    if (likely(walk->flags & BLOCKWALK_FLAGS_DIRECT_OUT)) {
         blockwalk_advance_out(walk, walk->chunk_size, walk->bytesleft);
     } else {
         // write the last chunk if in indirect mode:
@@ -142,7 +142,7 @@ void blockwalk_next_chunk(struct blockwalk *walk)
     }
 
     size = min(size_in, size_out);
-    if (size < walk->bytesleft) {
+    if (likely(size < walk->bytesleft)) {
         size = size & ~(walk->blocksize - 1);
 
         if (unlikely(size_in < walk->blocksize)) {
