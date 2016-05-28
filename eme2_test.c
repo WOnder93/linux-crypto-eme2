@@ -9,21 +9,6 @@
 #include "eme2_tv.h"
 #include "eme2.h"
 
-const test_case_t *cases[] = {
-    &case1,
-    &case2,
-    &case3,
-    &case4,
-    &case5,
-    &case6,
-    &case7,
-    &case8,
-    &case9,
-    &case10,
-    &case11,
-    NULL
-};
-
 struct result {
     struct completion comp;
     int err;
@@ -94,7 +79,7 @@ static int eme2_decrypt_sync(struct ablkcipher_request *req, unsigned int ivsize
     return err;
 }
 
-static int run_test_case(const test_case_t *c, unsigned int number)
+static int run_test_case(const struct eme2_test_case *c, unsigned int number)
 {
     int err = 0;
     int failed = 0;
@@ -119,7 +104,7 @@ static int run_test_case(const test_case_t *c, unsigned int number)
         goto out;
     }
 
-    err = crypto_ablkcipher_setkey(cipher, c->key, c->bytes_in_key);
+    err = crypto_ablkcipher_setkey(cipher, c->key, c->key_len);
     if (err) {
         printk("eme2: tests: ERROR setting key!\n");
         goto out;
@@ -174,13 +159,13 @@ out:
 
 int eme2_run_tests(void)
 {
-    unsigned int i = 0;
+    unsigned int i = 0, ncases = ARRAY_SIZE(eme2_test_cases);
     int res, failed = 0;
 
     printk("eme2: tests: Running tests...\n");
-    for (i = 0; cases[i] != NULL; i++) {
+    for (i = 0; i < ncases; i++) {
         printk("eme2: tests: Running testcase %u...\n", i);
-        res = run_test_case(cases[i], i);
+        res = run_test_case(&eme2_test_cases[i], i);
         if (res < 0) {
             return -EINVAL;
         }
