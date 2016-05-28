@@ -10,8 +10,8 @@
  * any later version.
  */
 
-#ifndef EME2_TV_H
-#define EME2_TV_H
+#ifndef _CRYPTO_EME2_TV_H
+#define _CRYPTO_EME2_TV_H
 
 #include <linux/types.h>
 
@@ -2593,5 +2593,5 @@ struct eme2_test_case eme2_test_cases[] = {
     MAKE_CASE(11),
 };
 
-#endif // EME2_TV_H
+#endif /* _CRYPTO_EME2_TV_H */
 
