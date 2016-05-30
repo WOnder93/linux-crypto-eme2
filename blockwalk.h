@@ -46,6 +46,7 @@ static inline void *blockwalk_chunk_out(const struct blockwalk *walk)
             ? walk->mapped_out + walk->offset_out : walk->buffer;
 }
 
-void blockwalk_next_chunk(struct blockwalk *walk);
+void blockwalk_chunk_start(struct blockwalk *walk);
+void blockwalk_chunk_finish(struct blockwalk *walk);
 
 #endif /* _CRYPTO_BLOCKWALK_H */
