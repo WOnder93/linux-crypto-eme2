@@ -2579,7 +2579,7 @@ static const u8 eme2_case11_assoc_data[] = {
     sizeof(eme2_case##n##_plaintext), \
 }
 
-struct eme2_test_case eme2_test_cases[] = {
+static const struct eme2_test_case eme2_test_cases[] = {
     MAKE_CASE(1),
     MAKE_CASE(2),
     MAKE_CASE(3),
