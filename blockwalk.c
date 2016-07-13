@@ -52,6 +52,7 @@ static void blockwalk_advance_in(
         } else {
             walk->flags |= BLOCKWALK_FLAGS_DIFF;
         }
+        scatterwalk_done(&walk->sg_in, 0, 0);
         return;
     }
 
@@ -61,7 +62,7 @@ static void blockwalk_advance_in(
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_in);
         }
-        scatterwalk_done(&walk->sg_in, 0, more);
+        scatterwalk_done(&walk->sg_in, 0, 1);
         walk->flags |= BLOCKWALK_FLAGS_DIFF;
         walk->mapped_in = scatterwalk_map_page(&walk->sg_in);
         walk->offset_in = scatterwalk_offset_in_page(&walk->sg_in);
@@ -78,6 +79,7 @@ static void blockwalk_advance_out(
         } else {
             walk->flags |= BLOCKWALK_FLAGS_DIFF;
         }
+        scatterwalk_done(&walk->sg_out, 1, 0);
         return;
     }
 
@@ -87,7 +89,7 @@ static void blockwalk_advance_out(
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_out);
         }
-        scatterwalk_done(&walk->sg_out, 1, more);
+        scatterwalk_done(&walk->sg_out, 1, 1);
         if (scatterwalk_samepage(&walk->sg_in, &walk->sg_out)) {
             walk->mapped_out = walk->mapped_in;
             walk->flags &= ~BLOCKWALK_FLAGS_DIFF;
