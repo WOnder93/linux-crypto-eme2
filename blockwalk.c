@@ -46,6 +46,9 @@ EXPORT_SYMBOL_GPL(blockwalk_start);
 static void blockwalk_advance_in(
         struct blockwalk *walk, unsigned int size, unsigned int more)
 {
+    scatterwalk_advance(&walk->sg_in, size);
+    walk->offset_in += size;
+
     if (unlikely(!more)) {
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_in);
@@ -56,8 +59,6 @@ static void blockwalk_advance_in(
         return;
     }
 
-    scatterwalk_advance(&walk->sg_in, size);
-    walk->offset_in += size;
     if (unlikely(walk->offset_in >= walk->limit_in)) {
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_in);
@@ -73,6 +74,9 @@ static void blockwalk_advance_in(
 static void blockwalk_advance_out(
         struct blockwalk *walk, unsigned int size, unsigned int more)
 {
+    scatterwalk_advance(&walk->sg_out, size);
+    walk->offset_out += size;
+
     if (unlikely(!more)) {
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_out);
@@ -83,8 +87,6 @@ static void blockwalk_advance_out(
         return;
     }
 
-    scatterwalk_advance(&walk->sg_out, size);
-    walk->offset_out += size;
     if (unlikely(walk->offset_out >= walk->limit_out)) {
         if (walk->flags & BLOCKWALK_FLAGS_DIFF) {
             scatterwalk_unmap(walk->mapped_out);
@@ -102,9 +104,9 @@ static void blockwalk_advance_out(
     }
 }
 
-void blockwalk_next_chunk(struct blockwalk *walk)
+void blockwalk_chunk_finish(struct blockwalk *walk)
 {
-    unsigned int size, size_in, size_out;
+    unsigned int size;
     u8 *tmp;
 
     // advance the buffers if in direct mode:
@@ -127,6 +129,13 @@ void blockwalk_next_chunk(struct blockwalk *walk)
                         walk, size, walk->chunk_size + walk->bytesleft);
         }
     }
+}
+EXPORT_SYMBOL_GPL(blockwalk_chunk_finish);
+
+void blockwalk_chunk_start(struct blockwalk *walk)
+{
+    unsigned int size, size_in, size_out;
+    u8 *tmp;
 
     walk->flags |= BLOCKWALK_FLAGS_DIRECT_IN;
     walk->flags |= BLOCKWALK_FLAGS_DIRECT_OUT;
@@ -174,4 +183,4 @@ void blockwalk_next_chunk(struct blockwalk *walk)
         } while (size != 0);
     }
 }
-EXPORT_SYMBOL_GPL(blockwalk_next_chunk);
+EXPORT_SYMBOL_GPL(blockwalk_chunk_start);

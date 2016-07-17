@@ -307,7 +307,7 @@ static int eme2_phase1(struct eme2_req_ctx *rctx)
                     buffer.bytes, req->src, req->dst, reqsize);
 
     do {
-        blockwalk_next_chunk(&walk);
+        blockwalk_chunk_start(&walk);
 
         avail       = blockwalk_chunk_size(&walk);
         cursor_in   = blockwalk_chunk_in(&walk);
@@ -324,8 +324,9 @@ static int eme2_phase1(struct eme2_req_ctx *rctx)
             ++cursor_in;
             ++cursor_out;
         }
+
+        blockwalk_chunk_finish(&walk);
     } while (blockwalk_bytes_left(&walk));
-    blockwalk_next_chunk(&walk);
 
     ablkcipher_request_set_crypt(
                 subreq, req->dst, req->dst,
@@ -357,8 +358,8 @@ static int eme2_phase2(struct eme2_req_ctx *rctx)
     blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_ablkcipher_alignmask(tfm),
                     buffer.bytes, req->dst, req->dst, req->nbytes);
 
-    do {
-        blockwalk_next_chunk(&walk);
+    for (;;) {
+        blockwalk_chunk_start(&walk);
 
         avail       = blockwalk_chunk_size(&walk);
         cursor_in   = blockwalk_chunk_in(&walk);
@@ -372,7 +373,12 @@ static int eme2_phase2(struct eme2_req_ctx *rctx)
             ++cursor_in;
             ++cursor_out;
         }
-    } while (blockwalk_bytes_left(&walk));
+
+        if (unlikely(!blockwalk_bytes_left(&walk))) {
+            break;
+        }
+        blockwalk_chunk_finish(&walk);
+    }
 
     if (unlikely(avail != 0)) {
         /* MP = MP xor PPP_m */
@@ -393,7 +399,7 @@ static int eme2_phase2(struct eme2_req_ctx *rctx)
         /* MC = MC_1 = AES-Enc(K_AES, MP) */
         rctx->crypt_fn(ctx->child, mc.bytes, rctx->mp.bytes);
     }
-    blockwalk_next_chunk(&walk);
+    blockwalk_chunk_finish(&walk);
 
     /* M = M_1 = MP xor MC */
     eme2_block_xor(&m1, &rctx->mp, &mc);
@@ -408,7 +414,7 @@ static int eme2_phase2(struct eme2_req_ctx *rctx)
     blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_ablkcipher_alignmask(tfm),
                     buffer.bytes, req->dst, req->dst, reqsize);
     do {
-        blockwalk_next_chunk(&walk);
+        blockwalk_chunk_start(&walk);
 
         avail       = blockwalk_chunk_size(&walk);
         cursor_in   = blockwalk_chunk_in(&walk);
@@ -447,8 +453,9 @@ static int eme2_phase2(struct eme2_req_ctx *rctx)
             ++cursor_in;
             ++cursor_out;
         }
+
+        blockwalk_chunk_finish(&walk);
     } while (blockwalk_bytes_left(&walk));
-    blockwalk_next_chunk(&walk);
 
     ablkcipher_request_set_crypt(
                 subreq, req->dst, req->dst,
@@ -483,7 +490,7 @@ static int eme2_phase3(struct eme2_req_ctx *rctx)
                     buffer.bytes, req->src, req->dst, reqsize);
 
     do {
-        blockwalk_next_chunk(&walk);
+        blockwalk_chunk_start(&walk);
 
         avail       = blockwalk_chunk_size(&walk);
         cursor_in   = blockwalk_chunk_in(&walk);
@@ -517,8 +524,9 @@ static int eme2_phase3(struct eme2_req_ctx *rctx)
             ++cursor_in;
             ++cursor_out;
         }
+
+        blockwalk_chunk_finish(&walk);
     } while (blockwalk_bytes_left(&walk));
-    blockwalk_next_chunk(&walk);
 
     return 0;
 }
