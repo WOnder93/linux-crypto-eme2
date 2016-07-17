@@ -28,8 +28,11 @@
 #include "eme2_test.h"
 #include "blockwalk.h"
 
+struct eme2_req_ctx;
+
 typedef void (*eme2_crypt_fn)(struct crypto_cipher *, u8 *, const u8 *);
 typedef int  (*eme2_crypt_ecb_fn)(struct ablkcipher_request *req);
+typedef int  (*eme2_continue_fn)(struct eme2_req_ctx *rctx);
 
 union eme2_block {
     be128 b128;
@@ -58,6 +61,8 @@ static inline void eme2_block_gf128mul(
 
 struct eme2_req_ctx {
     struct ablkcipher_request* parent;
+
+    eme2_continue_fn next;
 
     eme2_crypt_fn crypt_fn;
     eme2_crypt_ecb_fn crypt_ecb_fn;
@@ -222,7 +227,7 @@ static int eme2_phase1(struct eme2_req_ctx *rctx);
 static int eme2_phase2(struct eme2_req_ctx *rctx);
 static int eme2_phase3(struct eme2_req_ctx *rctx);
 
-static void eme2_phase2_cb(struct crypto_async_request *subreq, int err)
+static void eme2_callback(struct crypto_async_request *subreq, int err)
 {
     struct eme2_req_ctx *rctx = subreq->data;
     struct ablkcipher_request *req = rctx->parent;
@@ -236,27 +241,7 @@ static void eme2_phase2_cb(struct crypto_async_request *subreq, int err)
         return;
     }
 
-    err = eme2_phase2(rctx);
-    if (err == 0 || eme2_err_is_bad(req, err)) {
-        ablkcipher_request_complete(req, err);
-    }
-}
-
-static void eme2_phase3_cb(struct crypto_async_request *subreq, int err)
-{
-    struct eme2_req_ctx *rctx = subreq->data;
-    struct ablkcipher_request *req = rctx->parent;
-
-    switch (err) {
-    case 0:
-    case -EINPROGRESS:
-        return;
-    default:
-        ablkcipher_request_complete(req, err);
-        return;
-    }
-
-    err = eme2_phase3(rctx);
+    err = rctx->next(rctx);
     if (err == 0 || eme2_err_is_bad(req, err)) {
         ablkcipher_request_complete(req, err);
     }
@@ -328,12 +313,13 @@ static int eme2_phase1(struct eme2_req_ctx *rctx)
         blockwalk_chunk_finish(&walk);
     } while (blockwalk_bytes_left(&walk));
 
+    rctx->next = eme2_phase2;
     ablkcipher_request_set_crypt(
                 subreq, req->dst, req->dst,
                 reqsize, NULL);
     ablkcipher_request_set_callback(
                 subreq, rctx->parent->base.flags,
-                &eme2_phase2_cb, rctx);
+                eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
     if (err != 0) {
         return err;
@@ -457,12 +443,13 @@ static int eme2_phase2(struct eme2_req_ctx *rctx)
         blockwalk_chunk_finish(&walk);
     } while (blockwalk_bytes_left(&walk));
 
+    rctx->next = eme2_phase3;
     ablkcipher_request_set_crypt(
                 subreq, req->dst, req->dst,
                 reqsize, NULL);
     ablkcipher_request_set_callback(
                 subreq, rctx->parent->base.flags,
-                &eme2_phase3_cb, rctx);
+                eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
     if (err != 0) {
         return err;
