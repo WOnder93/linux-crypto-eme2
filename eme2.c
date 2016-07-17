@@ -237,7 +237,7 @@ static void eme2_phase2_cb(struct crypto_async_request *subreq, int err)
     }
 
     err = eme2_phase2(rctx);
-    if (eme2_err_is_bad(req, err)) {
+    if (err == 0 || eme2_err_is_bad(req, err)) {
         ablkcipher_request_complete(req, err);
     }
 }
@@ -257,7 +257,7 @@ static void eme2_phase3_cb(struct crypto_async_request *subreq, int err)
     }
 
     err = eme2_phase3(rctx);
-    if (eme2_err_is_bad(req, err)) {
+    if (err == 0 || eme2_err_is_bad(req, err)) {
         ablkcipher_request_complete(req, err);
     }
 }
