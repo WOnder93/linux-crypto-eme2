@@ -32,7 +32,7 @@ struct eme2_req_ctx;
 
 typedef void (*eme2_crypt_fn)(struct crypto_cipher *, u8 *, const u8 *);
 typedef int  (*eme2_crypt_ecb_fn)(struct ablkcipher_request *req);
-typedef int  (*eme2_continue_fn)(struct eme2_req_ctx *rctx);
+typedef int  (*eme2_continue_fn)(struct eme2_req_ctx *rctx, u32 flags);
 
 union eme2_block {
     be128 b128;
@@ -223,9 +223,9 @@ static int eme2_err_is_bad(struct ablkcipher_request *req, int err)
     }
 }
 
-static int eme2_phase1(struct eme2_req_ctx *rctx);
-static int eme2_phase2(struct eme2_req_ctx *rctx);
-static int eme2_phase3(struct eme2_req_ctx *rctx);
+static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags);
+static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags);
+static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags);
 
 static void eme2_callback(struct crypto_async_request *subreq, int err)
 {
@@ -241,13 +241,14 @@ static void eme2_callback(struct crypto_async_request *subreq, int err)
         return;
     }
 
-    err = rctx->next(rctx);
+    err = rctx->next(rctx, 0);
     if (err == 0 || eme2_err_is_bad(req, err)) {
         ablkcipher_request_complete(req, err);
     }
 }
 
-static int eme2_crypt_start(struct eme2_req_ctx *rctx, unsigned int ivsize)
+static int eme2_crypt_start(struct eme2_req_ctx *rctx, unsigned int ivsize,
+                            u32 flags)
 {
     struct ablkcipher_request *req = rctx->parent;
 
@@ -268,10 +269,10 @@ static int eme2_crypt_start(struct eme2_req_ctx *rctx, unsigned int ivsize)
     rctx->ccc1 = rctx->mp;
 
     ablkcipher_request_set_tfm(subreq, ctx->child_ecb);
-    return eme2_phase1(rctx);
+    return eme2_phase1(rctx, flags);
 }
 
-static int eme2_phase1(struct eme2_req_ctx *rctx)
+static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags)
 {
     struct ablkcipher_request *subreq = &rctx->ecb_req;
     struct ablkcipher_request *req = rctx->parent;
@@ -318,16 +319,16 @@ static int eme2_phase1(struct eme2_req_ctx *rctx)
                 subreq, req->dst, req->dst,
                 reqsize, NULL);
     ablkcipher_request_set_callback(
-                subreq, rctx->parent->base.flags,
+                subreq, flags,
                 eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
     if (err != 0) {
         return err;
     }
-    return eme2_phase2(rctx);
+    return eme2_phase2(rctx, flags);
 }
 
-static int eme2_phase2(struct eme2_req_ctx *rctx)
+static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags)
 {
     struct ablkcipher_request *subreq = &rctx->ecb_req;
     struct ablkcipher_request *req = rctx->parent;
@@ -448,16 +449,16 @@ static int eme2_phase2(struct eme2_req_ctx *rctx)
                 subreq, req->dst, req->dst,
                 reqsize, NULL);
     ablkcipher_request_set_callback(
-                subreq, rctx->parent->base.flags,
+                subreq, flags,
                 eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
     if (err != 0) {
         return err;
     }
-    return eme2_phase3(rctx);
+    return eme2_phase3(rctx, flags);
 }
 
-static int eme2_phase3(struct eme2_req_ctx *rctx)
+static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags)
 {
     struct ablkcipher_request *req = rctx->parent;
 
@@ -521,26 +522,28 @@ static int eme2_phase3(struct eme2_req_ctx *rctx)
 int eme2_encrypt(struct ablkcipher_request *req, unsigned int ivsize)
 {
     struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
+    u32 flags = ablkcipher_request_flags(req);
     unsigned long align = crypto_ablkcipher_alignmask(tfm);
     struct eme2_req_ctx *rctx =
             (void *)PTR_ALIGN((u8 *)ablkcipher_request_ctx(req), align + 1);
 
     eme2_req_ctx_init(rctx, req, *crypto_cipher_encrypt_one,
                       &crypto_ablkcipher_encrypt);
-    return eme2_crypt_start(rctx, ivsize);
+    return eme2_crypt_start(rctx, ivsize, flags);
 }
 EXPORT_SYMBOL_GPL(eme2_encrypt);
 
 int eme2_decrypt(struct ablkcipher_request *req, unsigned int ivsize)
 {
     struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
+    u32 flags = ablkcipher_request_flags(req);
     unsigned long align = crypto_ablkcipher_alignmask(tfm);
     struct eme2_req_ctx *rctx =
             (void *)PTR_ALIGN((u8 *)ablkcipher_request_ctx(req), align + 1);
 
     eme2_req_ctx_init(rctx, req, *crypto_cipher_decrypt_one,
                       &crypto_ablkcipher_decrypt);
-    return eme2_crypt_start(rctx, ivsize);
+    return eme2_crypt_start(rctx, ivsize, flags);
 }
 EXPORT_SYMBOL_GPL(eme2_decrypt);
 
@@ -548,25 +551,27 @@ EXPORT_SYMBOL_GPL(eme2_decrypt);
 static int encrypt(struct ablkcipher_request *req)
 {
     struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
+    u32 flags = ablkcipher_request_flags(req);
     unsigned long align = crypto_ablkcipher_alignmask(tfm);
     struct eme2_req_ctx *rctx =
             (void *)PTR_ALIGN((u8 *)ablkcipher_request_ctx(req), align + 1);
 
     eme2_req_ctx_init(rctx, req, *crypto_cipher_encrypt_one,
                       &crypto_ablkcipher_encrypt);
-    return eme2_crypt_start(rctx, crypto_ablkcipher_ivsize(tfm));
+    return eme2_crypt_start(rctx, crypto_ablkcipher_ivsize(tfm), flags);
 }
 
 static int decrypt(struct ablkcipher_request *req)
 {
     struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
+    u32 flags = ablkcipher_request_flags(req);
     unsigned long align = crypto_ablkcipher_alignmask(tfm);
     struct eme2_req_ctx *rctx =
             (void *)PTR_ALIGN((u8 *)ablkcipher_request_ctx(req), align + 1);
 
     eme2_req_ctx_init(rctx, req, *crypto_cipher_decrypt_one,
                       &crypto_ablkcipher_decrypt);
-    return eme2_crypt_start(rctx, crypto_ablkcipher_ivsize(tfm));
+    return eme2_crypt_start(rctx, crypto_ablkcipher_ivsize(tfm), flags);
 }
 
 static int init_tfm(struct crypto_tfm *tfm)
