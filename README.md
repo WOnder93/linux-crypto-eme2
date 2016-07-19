@@ -12,7 +12,7 @@ To build the EME2 module, you need to have the header files for the Linux kernel
 
 To install the module, run:
 ```bash
-sudo modprobe gf128mul && sudo insmod eme2_module.ko
+sudo insmod eme2_module.ko
 ```
 
 To reinstall, run:

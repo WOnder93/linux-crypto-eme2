@@ -15,7 +15,7 @@
  */
 
 #include <crypto/algapi.h>
-#include <crypto/gf128mul.h>
+#include <crypto/b128ops.h>
 #include <crypto/internal/skcipher.h>
 #include <linux/completion.h>
 #include <linux/err.h>
@@ -56,7 +56,12 @@ static inline void eme2_block_xor(
 static inline void eme2_block_gf128mul(
         union eme2_block *res, const union eme2_block *x)
 {
-    gf128mul_x_ble(&res->b128, &x->b128);
+    u64 a = le64_to_cpu(x->b128.a);
+    u64 b = le64_to_cpu(x->b128.b);
+    u64 _tt = b & ((u64)0x01 << 63) ? 0x87 : 0;
+
+    res->b128.a = cpu_to_le64((a << 1) ^ _tt);
+    res->b128.b = cpu_to_le64((b << 1) | (a >> 63));
 }
 
 struct eme2_req_ctx {
