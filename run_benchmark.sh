@@ -1,5 +1,9 @@
 #!/bin/bash
 
+DIRNAME="$(dirname "$0")"
+
+bash "$DIRNAME/load_modules.sh"
+
 run_benchmark() {
     ALG=$1
     KEYSIZE=$2
@@ -9,11 +13,6 @@ run_benchmark() {
     # now for real:
     /sbin/cryptsetup benchmark -c $ALG -s $KEYSIZE | grep $ALG
 }
-
-make || exit 1
-
-sudo rmmod eme2_module 2>/dev/null
-sudo insmod eme2_module.ko || exit 1
 
 run_benchmark aes-eme2 384
 run_benchmark aes-eme2 448
