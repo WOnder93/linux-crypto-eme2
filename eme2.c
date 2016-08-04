@@ -53,7 +53,9 @@ static inline void eme2_block_xor(
     be128_xor(&res->b128, &x->b128, &y->b128);
 }
 
-static inline void eme2_block_gf128mul(
+/* this is an inlinable version of gf128mul_x_ble() */
+/* it causes significant speedup vs calling the function from gf128mul.ko */
+static inline void eme2_block_gfmul(
         union eme2_block *res, const union eme2_block *x)
 {
     u64 a = le64_to_cpu(x->b128.a);
@@ -164,7 +166,7 @@ static inline void eme2_process_assoc_data_step(
 {
     union eme2_block tmp;
     /* K_AD = mult-by-alpha(K_AD) */
-    eme2_block_gf128mul(k_ad, k_ad);
+    eme2_block_gfmul(k_ad, k_ad);
 
     /* TT_j = AES-Enc(K_AES, K_AD xor T_j) xor K_AD */
     /* T_star = T_star xor TT_j */
@@ -209,7 +211,7 @@ static inline void eme2_process_assoc_data(
 
         /* one more mult-by-alpha is required for padded block: */
         /* K_AD = mult-by-alpha(K_AD) */
-        eme2_block_gf128mul(&k_ad, &k_ad);
+        eme2_block_gfmul(&k_ad, &k_ad);
 
         eme2_process_assoc_data_step(ctx->child, t_star, &k_ad, &last_block);
     }
@@ -309,7 +311,7 @@ static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags)
             eme2_block_xor(cursor_out, &l, cursor_in);
 
             /* L = mult-by-alpha(L) */
-            eme2_block_gf128mul(&l, &l);
+            eme2_block_gfmul(&l, &l);
 
             avail -= EME2_BLOCK_SIZE;
             ++cursor_in;
@@ -423,7 +425,7 @@ static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags)
         while (avail >= EME2_BLOCK_SIZE) {
             if (likely(j % 128 != 0)) {
                 /* M = mult-by-alpha(M) */
-                eme2_block_gf128mul(&m, &m);
+                eme2_block_gfmul(&m, &m);
 
                 /* CCC_j = PPP_j xor M */
                 eme2_block_xor(cursor_out, cursor_in, &m);
@@ -499,7 +501,7 @@ static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags)
             eme2_block_xor(cursor_out, &rctx->ccc1, &l);
 
             /* L = mult-by-alpha(L) */
-            eme2_block_gf128mul(&l, &l);
+            eme2_block_gfmul(&l, &l);
 
             avail -= EME2_BLOCK_SIZE;
             ++cursor_in;
@@ -511,7 +513,7 @@ static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags)
             eme2_block_xor(cursor_out, cursor_in, &l);
 
             /* L = mult-by-alpha(L) */
-            eme2_block_gf128mul(&l, &l);
+            eme2_block_gfmul(&l, &l);
 
             avail -= EME2_BLOCK_SIZE;
             ++cursor_in;
