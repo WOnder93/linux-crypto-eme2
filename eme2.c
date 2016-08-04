@@ -482,7 +482,7 @@ static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags)
     l = ctx->key_ecb;
 
     blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_ablkcipher_alignmask(tfm),
-                    buffer.bytes, req->src, req->dst, reqsize);
+                    buffer.bytes, req->dst, req->dst, reqsize);
 
     do {
         blockwalk_chunk_start(&walk);
