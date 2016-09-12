@@ -31,7 +31,7 @@
 struct eme2_req_ctx;
 
 typedef void (*eme2_crypt_fn)(struct crypto_cipher *, u8 *, const u8 *);
-typedef int  (*eme2_crypt_ecb_fn)(struct ablkcipher_request *req);
+typedef int  (*eme2_crypt_ecb_fn)(struct skcipher_request *req);
 typedef int  (*eme2_continue_fn)(struct eme2_req_ctx *rctx, u32 flags);
 
 union eme2_block {
@@ -67,7 +67,7 @@ static inline void eme2_block_gfmul(
 }
 
 struct eme2_req_ctx {
-    struct ablkcipher_request* parent;
+    struct skcipher_request* parent;
 
     eme2_continue_fn next;
 
@@ -76,12 +76,12 @@ struct eme2_req_ctx {
 
     union eme2_block mp, ccc1;
 
-    struct ablkcipher_request ecb_req CRYPTO_MINALIGN_ATTR;
+    struct skcipher_request ecb_req CRYPTO_MINALIGN_ATTR;
 };
 
 struct eme2_ctx {
    struct crypto_cipher *child; /* the underlying cipher */
-   struct crypto_ablkcipher *child_ecb;
+   struct crypto_skcipher *child_ecb;
                                 /* the underlying cipher in ECB mode */
    union eme2_block key_ad;     /* K_AD  - the associated data key */
    union eme2_block key_ecb;    /* K_ECB - the ECB pass key */
@@ -93,7 +93,7 @@ struct eme2_instance_ctx {
 };
 
 static void eme2_req_ctx_init(
-        struct eme2_req_ctx *rctx, struct ablkcipher_request *req,
+        struct eme2_req_ctx *rctx, struct skcipher_request *req,
         eme2_crypt_fn crypt_fn, eme2_crypt_ecb_fn crypt_ecb_fn)
 {
     rctx->parent = req;
@@ -102,7 +102,7 @@ static void eme2_req_ctx_init(
     rctx->crypt_ecb_fn = crypt_ecb_fn;
 }
 
-static int setkey(struct crypto_ablkcipher *cipher,
+static int setkey(struct crypto_skcipher *cipher,
                   const u8 *key, unsigned int keylen)
 {
     struct crypto_tfm *parent = &cipher->base;
@@ -114,9 +114,9 @@ static int setkey(struct crypto_ablkcipher *cipher,
 
     unsigned int key_aes_len = keylen - 2 * EME2_BLOCK_SIZE;
 
-    struct eme2_ctx *ctx = crypto_ablkcipher_ctx(cipher);
+    struct eme2_ctx *ctx = crypto_skcipher_ctx(cipher);
     struct crypto_cipher *child = ctx->child;
-    struct crypto_ablkcipher *child_ecb = ctx->child_ecb;
+    struct crypto_skcipher *child_ecb = ctx->child_ecb;
     u32 *flags = &parent->crt_flags;
     int err;
 
@@ -134,17 +134,17 @@ static int setkey(struct crypto_ablkcipher *cipher,
     if (err)
         return err;
 
-    crypto_tfm_set_flags(parent, crypto_ablkcipher_get_flags(child_ecb) &
+    crypto_tfm_set_flags(parent, crypto_skcipher_get_flags(child_ecb) &
                          CRYPTO_TFM_RES_MASK);
 
-    crypto_ablkcipher_clear_flags(child_ecb, CRYPTO_TFM_REQ_MASK);
-    crypto_ablkcipher_set_flags(child_ecb, crypto_tfm_get_flags(parent) &
-                                CRYPTO_TFM_REQ_MASK);
-    err = crypto_ablkcipher_setkey(child_ecb, key_aes, key_aes_len);
+    crypto_skcipher_clear_flags(child_ecb, CRYPTO_TFM_REQ_MASK);
+    crypto_skcipher_set_flags(child_ecb, crypto_tfm_get_flags(parent) &
+                              CRYPTO_TFM_REQ_MASK);
+    err = crypto_skcipher_setkey(child_ecb, key_aes, key_aes_len);
     if (err)
         return err;
 
-    crypto_tfm_set_flags(parent, crypto_ablkcipher_get_flags(child_ecb) &
+    crypto_tfm_set_flags(parent, crypto_skcipher_get_flags(child_ecb) &
                          CRYPTO_TFM_RES_MASK);
 
     /* copy the "associated data" and "ECB pass" keys into context: */
@@ -217,7 +217,7 @@ static inline void eme2_process_assoc_data(
     }
 }
 
-static int eme2_err_is_bad(struct ablkcipher_request *req, int err)
+static int eme2_err_is_bad(struct skcipher_request *req, int err)
 {
     switch (err) {
     case 0:
@@ -237,58 +237,58 @@ static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags);
 static void eme2_callback(struct crypto_async_request *subreq, int err)
 {
     struct eme2_req_ctx *rctx = subreq->data;
-    struct ablkcipher_request *req = rctx->parent;
+    struct skcipher_request *req = rctx->parent;
 
     switch (err) {
     case 0:
     case -EINPROGRESS:
         return;
     default:
-        ablkcipher_request_complete(req, err);
+        skcipher_request_complete(req, err);
         return;
     }
 
     err = rctx->next(rctx, 0);
     if (err == 0 || eme2_err_is_bad(req, err)) {
-        ablkcipher_request_complete(req, err);
+        skcipher_request_complete(req, err);
     }
 }
 
 static int eme2_crypt_start(struct eme2_req_ctx *rctx, unsigned int ivsize,
                             u32 flags)
 {
-    struct ablkcipher_request *req = rctx->parent;
+    struct skcipher_request *req = rctx->parent;
 
-    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
-    struct eme2_ctx *ctx = crypto_ablkcipher_ctx(tfm);
+    struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+    struct eme2_ctx *ctx = crypto_skcipher_ctx(tfm);
 
-    struct ablkcipher_request *subreq = &rctx->ecb_req;
+    struct skcipher_request *subreq = &rctx->ecb_req;
 
     /* input must be at least one block: */
-    if (unlikely(req->nbytes < EME2_BLOCK_SIZE)) {
+    if (unlikely(req->cryptlen < EME2_BLOCK_SIZE)) {
         /* TODO: see if this is the right error code to use here */
         /* (xts.c uses just BUG_ON... */
-        return req->nbytes == 0 ? 0 : -EINVAL;
+        return req->cryptlen == 0 ? 0 : -EINVAL;
     }
 
     /* init both MP and CCC_1 to T_star: */
-    eme2_process_assoc_data(ctx, &rctx->mp, req->info, ivsize);
+    eme2_process_assoc_data(ctx, &rctx->mp, req->iv, ivsize);
     rctx->ccc1 = rctx->mp;
 
-    ablkcipher_request_set_tfm(subreq, ctx->child_ecb);
+    skcipher_request_set_tfm(subreq, ctx->child_ecb);
     return eme2_phase1(rctx, flags);
 }
 
 static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags)
 {
-    struct ablkcipher_request *subreq = &rctx->ecb_req;
-    struct ablkcipher_request *req = rctx->parent;
+    struct skcipher_request *subreq = &rctx->ecb_req;
+    struct skcipher_request *req = rctx->parent;
 
-    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
-    struct eme2_ctx *ctx = crypto_ablkcipher_ctx(tfm);
+    struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+    struct eme2_ctx *ctx = crypto_skcipher_ctx(tfm);
 
     struct blockwalk walk;
-    unsigned int avail, reqsize = req->nbytes & EME2_BLOCK_MASK;
+    unsigned int avail, reqsize = req->cryptlen & EME2_BLOCK_MASK;
     union eme2_block *cursor_in, *cursor_out;
     union eme2_block buffer, l;
     int err;
@@ -296,7 +296,7 @@ static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags)
     /* L = K_ECB */
     l = ctx->key_ecb;
 
-    blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_ablkcipher_alignmask(tfm),
+    blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_skcipher_alignmask(tfm),
                     buffer.bytes, req->src, req->dst, reqsize);
 
     do {
@@ -322,10 +322,10 @@ static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags)
     } while (blockwalk_bytes_left(&walk));
 
     rctx->next = eme2_phase2;
-    ablkcipher_request_set_crypt(
+    skcipher_request_set_crypt(
                 subreq, req->dst, req->dst,
                 reqsize, NULL);
-    ablkcipher_request_set_callback(
+    skcipher_request_set_callback(
                 subreq, flags,
                 eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
@@ -337,20 +337,20 @@ static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags)
 
 static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags)
 {
-    struct ablkcipher_request *subreq = &rctx->ecb_req;
-    struct ablkcipher_request *req = rctx->parent;
+    struct skcipher_request *subreq = &rctx->ecb_req;
+    struct skcipher_request *req = rctx->parent;
 
-    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
-    struct eme2_ctx *ctx = crypto_ablkcipher_ctx(tfm);
+    struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+    struct eme2_ctx *ctx = crypto_skcipher_ctx(tfm);
 
     struct blockwalk walk;
-    unsigned int avail, j, reqsize = req->nbytes & EME2_BLOCK_MASK;
+    unsigned int avail, j, reqsize = req->cryptlen & EME2_BLOCK_MASK;
     union eme2_block *cursor_in, *cursor_out;
     union eme2_block buffer, mc, mp, m, m1;
     int err;
 
-    blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_ablkcipher_alignmask(tfm),
-                    buffer.bytes, req->dst, req->dst, req->nbytes);
+    blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_skcipher_alignmask(tfm),
+                    buffer.bytes, req->dst, req->dst, req->cryptlen);
 
     for (;;) {
         blockwalk_chunk_start(&walk);
@@ -405,7 +405,7 @@ static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags)
     /* L = K_ECB */
     j = 0;
 
-    blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_ablkcipher_alignmask(tfm),
+    blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_skcipher_alignmask(tfm),
                     buffer.bytes, req->dst, req->dst, reqsize);
     do {
         blockwalk_chunk_start(&walk);
@@ -452,10 +452,10 @@ static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags)
     } while (blockwalk_bytes_left(&walk));
 
     rctx->next = eme2_phase3;
-    ablkcipher_request_set_crypt(
+    skcipher_request_set_crypt(
                 subreq, req->dst, req->dst,
                 reqsize, NULL);
-    ablkcipher_request_set_callback(
+    skcipher_request_set_callback(
                 subreq, flags,
                 eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
@@ -467,13 +467,13 @@ static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags)
 
 static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags)
 {
-    struct ablkcipher_request *req = rctx->parent;
+    struct skcipher_request *req = rctx->parent;
 
-    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
-    struct eme2_ctx *ctx = crypto_ablkcipher_ctx(tfm);
+    struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+    struct eme2_ctx *ctx = crypto_skcipher_ctx(tfm);
 
     struct blockwalk walk;
-    unsigned int avail, reqsize = req->nbytes & EME2_BLOCK_MASK;
+    unsigned int avail, reqsize = req->cryptlen & EME2_BLOCK_MASK;
     union eme2_block *cursor_in, *cursor_out;
     union eme2_block buffer, l;
     int first_block = 1;
@@ -481,7 +481,7 @@ static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags)
     /* L = K_ECB */
     l = ctx->key_ecb;
 
-    blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_ablkcipher_alignmask(tfm),
+    blockwalk_start(&walk, EME2_BLOCK_SIZE, crypto_skcipher_alignmask(tfm),
                     buffer.bytes, req->dst, req->dst, reqsize);
 
     do {
@@ -526,65 +526,65 @@ static int eme2_phase3(struct eme2_req_ctx *rctx, u32 flags)
     return 0;
 }
 
-int eme2_encrypt(struct ablkcipher_request *req, unsigned int ivsize)
+int eme2_encrypt(struct skcipher_request *req, unsigned int ivsize)
 {
-    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
-    u32 flags = ablkcipher_request_flags(req);
-    unsigned long align = crypto_ablkcipher_alignmask(tfm);
+    struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+    u32 flags = skcipher_request_flags(req);
+    unsigned long align = crypto_skcipher_alignmask(tfm);
     struct eme2_req_ctx *rctx =
-            (void *)PTR_ALIGN((u8 *)ablkcipher_request_ctx(req), align + 1);
+            (void *)PTR_ALIGN((u8 *)skcipher_request_ctx(req), align + 1);
 
     eme2_req_ctx_init(rctx, req, *crypto_cipher_encrypt_one,
-                      &crypto_ablkcipher_encrypt);
+                      &crypto_skcipher_encrypt);
     return eme2_crypt_start(rctx, ivsize, flags);
 }
 EXPORT_SYMBOL_GPL(eme2_encrypt);
 
-int eme2_decrypt(struct ablkcipher_request *req, unsigned int ivsize)
+int eme2_decrypt(struct skcipher_request *req, unsigned int ivsize)
 {
-    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
-    u32 flags = ablkcipher_request_flags(req);
-    unsigned long align = crypto_ablkcipher_alignmask(tfm);
+    struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+    u32 flags = skcipher_request_flags(req);
+    unsigned long align = crypto_skcipher_alignmask(tfm);
     struct eme2_req_ctx *rctx =
-            (void *)PTR_ALIGN((u8 *)ablkcipher_request_ctx(req), align + 1);
+            (void *)PTR_ALIGN((u8 *)skcipher_request_ctx(req), align + 1);
 
     eme2_req_ctx_init(rctx, req, *crypto_cipher_decrypt_one,
-                      &crypto_ablkcipher_decrypt);
+                      &crypto_skcipher_decrypt);
     return eme2_crypt_start(rctx, ivsize, flags);
 }
 EXPORT_SYMBOL_GPL(eme2_decrypt);
 
 
-static int encrypt(struct ablkcipher_request *req)
+static int encrypt(struct skcipher_request *req)
 {
-    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
-    u32 flags = ablkcipher_request_flags(req);
-    unsigned long align = crypto_ablkcipher_alignmask(tfm);
+    struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+    u32 flags = skcipher_request_flags(req);
+    unsigned long align = crypto_skcipher_alignmask(tfm);
     struct eme2_req_ctx *rctx =
-            (void *)PTR_ALIGN((u8 *)ablkcipher_request_ctx(req), align + 1);
+            (void *)PTR_ALIGN((u8 *)skcipher_request_ctx(req), align + 1);
 
     eme2_req_ctx_init(rctx, req, *crypto_cipher_encrypt_one,
-                      &crypto_ablkcipher_encrypt);
-    return eme2_crypt_start(rctx, crypto_ablkcipher_ivsize(tfm), flags);
+                      &crypto_skcipher_encrypt);
+    return eme2_crypt_start(rctx, crypto_skcipher_ivsize(tfm), flags);
 }
 
-static int decrypt(struct ablkcipher_request *req)
+static int decrypt(struct skcipher_request *req)
 {
-    struct crypto_ablkcipher *tfm = crypto_ablkcipher_reqtfm(req);
-    u32 flags = ablkcipher_request_flags(req);
-    unsigned long align = crypto_ablkcipher_alignmask(tfm);
+    struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+    u32 flags = skcipher_request_flags(req);
+    unsigned long align = crypto_skcipher_alignmask(tfm);
     struct eme2_req_ctx *rctx =
-            (void *)PTR_ALIGN((u8 *)ablkcipher_request_ctx(req), align + 1);
+            (void *)PTR_ALIGN((u8 *)skcipher_request_ctx(req), align + 1);
 
     eme2_req_ctx_init(rctx, req, *crypto_cipher_decrypt_one,
-                      &crypto_ablkcipher_decrypt);
-    return eme2_crypt_start(rctx, crypto_ablkcipher_ivsize(tfm), flags);
+                      &crypto_skcipher_decrypt);
+    return eme2_crypt_start(rctx, crypto_skcipher_ivsize(tfm), flags);
 }
 
 static int init_tfm(struct crypto_tfm *tfm)
 {
     struct crypto_cipher *cipher;
-    struct crypto_ablkcipher *cipher_ecb;
+    struct crypto_skcipher *cipher_ecb;
     struct crypto_instance *inst = (void *)tfm->__crt_alg;
     struct eme2_instance_ctx *inst_ctx = crypto_instance_ctx(inst);
     struct eme2_ctx *ctx = crypto_tfm_ctx(tfm);
@@ -596,7 +596,7 @@ static int init_tfm(struct crypto_tfm *tfm)
 
     cipher = crypto_spawn_cipher(&inst_ctx->spawn);
     if (IS_ERR(cipher)) {
-        crypto_free_ablkcipher(cipher_ecb);
+        crypto_free_skcipher(cipher_ecb);
         return PTR_ERR(cipher);
     }
 
@@ -607,7 +607,7 @@ static int init_tfm(struct crypto_tfm *tfm)
     align &= ~(crypto_tfm_ctx_alignment() - 1);
     tfm->crt_ablkcipher.reqsize = align +
             sizeof(struct eme2_req_ctx) +
-            crypto_ablkcipher_reqsize(cipher_ecb);
+            crypto_skcipher_reqsize(cipher_ecb);
     return 0;
 }
 
@@ -615,21 +615,30 @@ static void exit_tfm(struct crypto_tfm *tfm)
 {
     struct eme2_ctx *ctx = crypto_tfm_ctx(tfm);
     crypto_free_cipher(ctx->child);
-    crypto_free_ablkcipher(ctx->child_ecb);
+    crypto_free_skcipher(ctx->child_ecb);
     /* clear the xor keys: */
     memzero_explicit(&ctx->key_ad,  sizeof(ctx->key_ad));
     memzero_explicit(&ctx->key_ecb, sizeof(ctx->key_ecb));
 }
 
-static struct crypto_instance *alloc(struct rtattr **tb)
+static void free(struct skcipher_instance *inst)
 {
-    struct crypto_instance *inst;
+    struct eme2_instance_ctx *ctx = skcipher_instance_ctx(inst);
+    crypto_drop_spawn(&ctx->spawn);
+    crypto_drop_skcipher(&ctx->ecb_spawn);
+    kzfree(inst);
+}
+
+static struct skcipher_instance *alloc(struct rtattr **tb)
+{
+    struct skcipher_instance *inst;
+    struct crypto_instance *crypto_inst;
     struct eme2_instance_ctx *ctx;
     struct crypto_alg *alg, *ecb_alg;
     char ecb_name[CRYPTO_MAX_ALG_NAME];
     int err;
 
-    err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_BLKCIPHER);
+    err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SKCIPHER);
     if (err)
         return ERR_PTR(err);
 
@@ -648,10 +657,11 @@ static struct crypto_instance *alloc(struct rtattr **tb)
         inst = ERR_PTR(-ENOMEM);
         goto out_put_alg;
     }
-    ctx = crypto_instance_ctx(inst);
+    crypto_inst = skcipher_crypto_instance(inst);
+    ctx = skcipher_instance_ctx(inst);
 
     /* prepare spawn for crypto_cipher: */
-    err = crypto_init_spawn(&ctx->spawn, alg, inst,
+    err = crypto_init_spawn(&ctx->spawn, alg, crypto_inst,
                             CRYPTO_ALG_TYPE_MASK | CRYPTO_ALG_ASYNC);
     if (err)
         goto err_free_inst;
@@ -662,53 +672,56 @@ static struct crypto_instance *alloc(struct rtattr **tb)
             >= CRYPTO_MAX_ALG_NAME)
         goto err_drop_spawn;
 
-    crypto_set_skcipher_spawn(&ctx->ecb_spawn, inst);
+    crypto_set_skcipher_spawn(&ctx->ecb_spawn, crypto_inst);
     err = crypto_grab_skcipher(&ctx->ecb_spawn, ecb_name, 0, 0);
     if (err)
         goto err_drop_spawn;
 
     /* get the crypto_alg for the ECB mode: */
-    ecb_alg = crypto_skcipher_spawn_alg(&ctx->ecb_spawn);
+    ecb_alg = &crypto_skcipher_spawn_alg(&ctx->ecb_spawn)->base;
 
     err = -ENAMETOOLONG;
-    if (snprintf(inst->alg.cra_name, CRYPTO_MAX_ALG_NAME, "eme2(%s)",
-                 alg->cra_name) >= CRYPTO_MAX_ALG_NAME)
+    if (snprintf(crypto_inst->alg.cra_name, CRYPTO_MAX_ALG_NAME,
+                 "eme2(%s)", alg->cra_name) >= CRYPTO_MAX_ALG_NAME)
         goto err_drop_ecb_spawn;
 
-    if (snprintf(inst->alg.cra_driver_name, CRYPTO_MAX_ALG_NAME,"eme2(%s,%s)",
-                 alg->cra_driver_name, ecb_alg->cra_driver_name)
+    if (snprintf(crypto_inst->alg.cra_driver_name, CRYPTO_MAX_ALG_NAME,
+                 "eme2(%s,%s)", alg->cra_driver_name, ecb_alg->cra_driver_name)
             >= CRYPTO_MAX_ALG_NAME)
         goto err_drop_ecb_spawn;
 
-    inst->alg.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER |
+    crypto_inst->alg.cra_flags = CRYPTO_ALG_TYPE_SKCIPHER |
             (ecb_alg->cra_flags & CRYPTO_ALG_ASYNC);
-    inst->alg.cra_priority = ecb_alg->cra_priority;
-    inst->alg.cra_blocksize = 1;
+    crypto_inst->alg.cra_priority = ecb_alg->cra_priority;
+    crypto_inst->alg.cra_blocksize = 1;
+    inst->alg.chunksize = EME2_BLOCK_SIZE;
 
     if (alg->cra_alignmask < 7)
-        inst->alg.cra_alignmask = 7;
+        crypto_inst->alg.cra_alignmask = 7;
     else
-        inst->alg.cra_alignmask =
+        crypto_inst->alg.cra_alignmask =
                 max(alg->cra_alignmask, ecb_alg->cra_alignmask);
 
-    inst->alg.cra_type = &crypto_ablkcipher_type;
+    crypto_inst->alg.cra_type = &crypto_ablkcipher_type;
 
     /* since IV size must be fixed, we arbitrarily choose one block for it: */
-    inst->alg.cra_ablkcipher.ivsize = EME2_BLOCK_SIZE;
+    inst->alg.ivsize = EME2_BLOCK_SIZE;
 
-    inst->alg.cra_ablkcipher.min_keysize =
-        2 * EME2_BLOCK_SIZE + alg->cra_cipher.cia_min_keysize;
-    inst->alg.cra_ablkcipher.max_keysize =
-        2 * EME2_BLOCK_SIZE + alg->cra_cipher.cia_max_keysize;
+    inst->alg.min_keysize = 2 * EME2_BLOCK_SIZE +
+            alg->cra_cipher.cia_min_keysize;
+    inst->alg.max_keysize = 2 * EME2_BLOCK_SIZE +
+            alg->cra_cipher.cia_max_keysize;
 
-    inst->alg.cra_ablkcipher.setkey = setkey;
-    inst->alg.cra_ablkcipher.encrypt = encrypt;
-    inst->alg.cra_ablkcipher.decrypt = decrypt;
+    inst->alg.setkey = setkey;
+    inst->alg.encrypt = encrypt;
+    inst->alg.decrypt = decrypt;
 
-    inst->alg.cra_ctxsize = sizeof(struct eme2_ctx);
+    crypto_inst->alg.cra_ctxsize = sizeof(struct eme2_ctx);
 
-    inst->alg.cra_init = init_tfm;
-    inst->alg.cra_exit = exit_tfm;
+    crypto_inst->alg.cra_init = init_tfm;
+    crypto_inst->alg.cra_exit = exit_tfm;
+
+    inst->free = free;
 
 out_put_alg:
     crypto_mod_put(alg);
@@ -724,18 +737,26 @@ err_free_inst:
     return ERR_PTR(err);
 }
 
-static void free(struct crypto_instance *inst)
+static int create(struct crypto_template *tmpl, struct rtattr **tb)
 {
-    struct eme2_instance_ctx *ctx = crypto_instance_ctx(inst);
-    crypto_drop_spawn(&ctx->spawn);
-    crypto_drop_skcipher(&ctx->ecb_spawn);
-    kzfree(inst);
+    struct skcipher_instance *inst = alloc(tb);
+    int err;
+
+    if (IS_ERR(inst)) {
+        return PTR_ERR(inst);
+    }
+
+    err = skcipher_register_instance(tmpl, inst);
+    if (err) {
+        free(inst);
+        return err;
+    }
+    return 0;
 }
 
 static struct crypto_template crypto_tmpl = {
     .name = "eme2",
-    .alloc = alloc,
-    .free = free,
+    .create = create,
     .module = THIS_MODULE,
 };
 

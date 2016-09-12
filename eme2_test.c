@@ -25,7 +25,7 @@ static void result_complete(struct crypto_async_request *req, int err)
     complete(&res->comp);
 }
 
-static int eme2_encrypt_sync(struct ablkcipher_request *req, unsigned int ivsize)
+static int eme2_encrypt_sync(struct skcipher_request *req, unsigned int ivsize)
 {
     struct result res;
     int err;
@@ -33,7 +33,7 @@ static int eme2_encrypt_sync(struct ablkcipher_request *req, unsigned int ivsize
     res.err = 0;
     init_completion(&res.comp);
 
-    ablkcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
+    skcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
                                     &result_complete, &res);
     err = eme2_encrypt(req, ivsize);
     switch (err) {
@@ -52,7 +52,7 @@ static int eme2_encrypt_sync(struct ablkcipher_request *req, unsigned int ivsize
     return err;
 }
 
-static int eme2_decrypt_sync(struct ablkcipher_request *req, unsigned int ivsize)
+static int eme2_decrypt_sync(struct skcipher_request *req, unsigned int ivsize)
 {
     struct result res;
     int err;
@@ -60,7 +60,7 @@ static int eme2_decrypt_sync(struct ablkcipher_request *req, unsigned int ivsize
     res.err = 0;
     init_completion(&res.comp);
 
-    ablkcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
+    skcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
                                     &result_complete, &res);
     err = eme2_decrypt(req, ivsize);
     switch (err) {
@@ -83,8 +83,8 @@ static int run_test_case(const struct eme2_test_case *c, unsigned int number)
 {
     int err = 0;
     int failed = 0;
-    struct crypto_ablkcipher *cipher = NULL;
-    struct ablkcipher_request *req = NULL;
+    struct crypto_skcipher *cipher = NULL;
+    struct skcipher_request *req = NULL;
     u8 *buffer = NULL;
     struct scatterlist sg[1];
 
@@ -96,7 +96,7 @@ static int run_test_case(const struct eme2_test_case *c, unsigned int number)
 
     sg_init_one(sg, buffer, c->plaintext_len);
 
-    cipher = crypto_alloc_ablkcipher("eme2(aes)", 0, 0);
+    cipher = crypto_alloc_skcipher("eme2(aes)", 0, 0);
     if (IS_ERR(cipher)) {
         printk("eme2: tests: ERROR allocating cipher!\n");
         err = PTR_ERR(cipher);
@@ -104,13 +104,13 @@ static int run_test_case(const struct eme2_test_case *c, unsigned int number)
         goto out;
     }
 
-    err = crypto_ablkcipher_setkey(cipher, c->key, c->key_len);
+    err = crypto_skcipher_setkey(cipher, c->key, c->key_len);
     if (err) {
         printk("eme2: tests: ERROR setting key!\n");
         goto out;
     }
 
-    req = ablkcipher_request_alloc(cipher, GFP_KERNEL);
+    req = skcipher_request_alloc(cipher, GFP_KERNEL);
     if (IS_ERR(req)) {
         printk("eme2: tests: ERROR allocating request!\n");
         err = PTR_ERR(req);
@@ -118,8 +118,8 @@ static int run_test_case(const struct eme2_test_case *c, unsigned int number)
         goto out;
     }
 
-    ablkcipher_request_set_tfm(req, cipher);
-    ablkcipher_request_set_crypt(req, sg, sg, c->plaintext_len, (u8 *)c->assoc_data);
+    skcipher_request_set_tfm(req, cipher);
+    skcipher_request_set_crypt(req, sg, sg, c->plaintext_len, (u8 *)c->assoc_data);
 
     memcpy(buffer, c->plaintext, c->plaintext_len);
 
@@ -151,9 +151,9 @@ out:
     if (buffer)
         kfree(buffer);
     if (cipher)
-        crypto_free_ablkcipher(cipher);
+        crypto_free_skcipher(cipher);
     if (req)
-        ablkcipher_request_free(req);
+        skcipher_request_free(req);
     return err < 0 ? err : failed;
 }
 
