@@ -581,13 +581,14 @@ static int decrypt(struct skcipher_request *req)
     return eme2_crypt_start(rctx, crypto_skcipher_ivsize(tfm), flags);
 }
 
-static int init_tfm(struct crypto_tfm *tfm)
+static int init_tfm(struct crypto_skcipher *tfm)
 {
     struct crypto_cipher *cipher;
     struct crypto_skcipher *cipher_ecb;
-    struct crypto_instance *inst = (void *)tfm->__crt_alg;
+    struct crypto_tfm *crypto_tfm = crypto_skcipher_tfm(tfm);
+    struct crypto_instance *inst = crypto_tfm_alg_instance(crypto_tfm);
     struct eme2_instance_ctx *inst_ctx = crypto_instance_ctx(inst);
-    struct eme2_ctx *ctx = crypto_tfm_ctx(tfm);
+    struct eme2_ctx *ctx = crypto_skcipher_ctx(tfm);
     unsigned int align;
 
     cipher_ecb = crypto_spawn_skcipher(&inst_ctx->ecb_spawn);
@@ -603,17 +604,17 @@ static int init_tfm(struct crypto_tfm *tfm)
     ctx->child = cipher;
     ctx->child_ecb = cipher_ecb;
 
-    align = crypto_tfm_alg_alignmask(tfm);
+    align = crypto_skcipher_alignmask(tfm);
     align &= ~(crypto_tfm_ctx_alignment() - 1);
-    tfm->crt_ablkcipher.reqsize = align +
+    tfm->reqsize = align +
             sizeof(struct eme2_req_ctx) +
             crypto_skcipher_reqsize(cipher_ecb);
     return 0;
 }
 
-static void exit_tfm(struct crypto_tfm *tfm)
+static void exit_tfm(struct crypto_skcipher *tfm)
 {
-    struct eme2_ctx *ctx = crypto_tfm_ctx(tfm);
+    struct eme2_ctx *ctx = crypto_skcipher_ctx(tfm);
     crypto_free_cipher(ctx->child);
     crypto_free_skcipher(ctx->child_ecb);
     /* clear the xor keys: */
@@ -702,8 +703,6 @@ static struct skcipher_instance *alloc(struct rtattr **tb)
         crypto_inst->alg.cra_alignmask =
                 max(alg->cra_alignmask, ecb_alg->cra_alignmask);
 
-    crypto_inst->alg.cra_type = &crypto_ablkcipher_type;
-
     /* since IV size must be fixed, we arbitrarily choose one block for it: */
     inst->alg.ivsize = EME2_BLOCK_SIZE;
 
@@ -718,8 +717,8 @@ static struct skcipher_instance *alloc(struct rtattr **tb)
 
     crypto_inst->alg.cra_ctxsize = sizeof(struct eme2_ctx);
 
-    crypto_inst->alg.cra_init = init_tfm;
-    crypto_inst->alg.cra_exit = exit_tfm;
+    inst->alg.init = init_tfm;
+    inst->alg.exit = exit_tfm;
 
     inst->free = free;
 
