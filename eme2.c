@@ -585,9 +585,8 @@ static int init_tfm(struct crypto_skcipher *tfm)
 {
     struct crypto_cipher *cipher;
     struct crypto_skcipher *cipher_ecb;
-    struct crypto_tfm *crypto_tfm = crypto_skcipher_tfm(tfm);
-    struct crypto_instance *inst = crypto_tfm_alg_instance(crypto_tfm);
-    struct eme2_instance_ctx *inst_ctx = crypto_instance_ctx(inst);
+    struct skcipher_instance *inst = skcipher_alg_instance(tfm);
+    struct eme2_instance_ctx *inst_ctx = skcipher_instance_ctx(inst);
     struct eme2_ctx *ctx = crypto_skcipher_ctx(tfm);
     unsigned int align;
 
@@ -606,9 +605,9 @@ static int init_tfm(struct crypto_skcipher *tfm)
 
     align = crypto_skcipher_alignmask(tfm);
     align &= ~(crypto_tfm_ctx_alignment() - 1);
-    tfm->reqsize = align +
-            sizeof(struct eme2_req_ctx) +
-            crypto_skcipher_reqsize(cipher_ecb);
+    crypto_skcipher_set_reqsize(tfm, align +
+                                sizeof(struct eme2_req_ctx) +
+                                crypto_skcipher_reqsize(cipher_ecb));
     return 0;
 }
 
