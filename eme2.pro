@@ -7,7 +7,8 @@ DEFINES += __KERNEL__
 
 ARCH=x86
 SRC_PROJECT_PATH = $$PWD
-LINUX_HEADERS_PATH = /usr/src/linux-headers-$$system(uname -r)
+LINUX_VERSION = $$system(uname -r)
+LINUX_HEADERS_PATH = /lib/modules/$$LINUX_VERSION/build
 
 INCLUDEPATH += $$SRC_PROJECT_PATH/include
 INCLUDEPATH += $$LINUX_HEADERS_PATH/include
