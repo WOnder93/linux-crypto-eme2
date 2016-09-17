@@ -31,6 +31,5 @@ DISTFILES += \
 HEADERS += \
     blockwalk.h \
     eme2_tv.h \
-    eme2.h \
-    eme2_test.h
+    eme2.h
 
