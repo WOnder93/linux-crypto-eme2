@@ -322,12 +322,8 @@ static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags)
     } while (blockwalk_bytes_left(&walk));
 
     rctx->next = eme2_phase2;
-    skcipher_request_set_crypt(
-                subreq, req->dst, req->dst,
-                reqsize, NULL);
-    skcipher_request_set_callback(
-                subreq, flags,
-                eme2_callback, rctx);
+    skcipher_request_set_crypt(subreq, req->dst, req->dst, reqsize, NULL);
+    skcipher_request_set_callback(subreq, flags, eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
     if (err != 0) {
         return err;
@@ -452,12 +448,8 @@ static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags)
     } while (blockwalk_bytes_left(&walk));
 
     rctx->next = eme2_phase3;
-    skcipher_request_set_crypt(
-                subreq, req->dst, req->dst,
-                reqsize, NULL);
-    skcipher_request_set_callback(
-                subreq, flags,
-                eme2_callback, rctx);
+    skcipher_request_set_crypt(subreq, req->dst, req->dst, reqsize, NULL);
+    skcipher_request_set_callback(subreq, flags, eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
     if (err != 0) {
         return err;
