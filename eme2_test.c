@@ -2,8 +2,6 @@
 #include <linux/scatterlist.h>
 #include <linux/completion.h>
 
-#include <crypto/internal/skcipher.h>
-
 #include "eme2_test.h"
 
 #include "eme2_tv.h"

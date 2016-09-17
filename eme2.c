@@ -322,12 +322,8 @@ static int eme2_phase1(struct eme2_req_ctx *rctx, u32 flags)
     } while (blockwalk_bytes_left(&walk));
 
     rctx->next = eme2_phase2;
-    ablkcipher_request_set_crypt(
-                subreq, req->dst, req->dst,
-                reqsize, NULL);
-    ablkcipher_request_set_callback(
-                subreq, flags,
-                eme2_callback, rctx);
+    ablkcipher_request_set_crypt(subreq, req->dst, req->dst,reqsize, NULL);
+    ablkcipher_request_set_callback(subreq, flags, eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
     if (err != 0) {
         return err;
@@ -452,12 +448,8 @@ static int eme2_phase2(struct eme2_req_ctx *rctx, u32 flags)
     } while (blockwalk_bytes_left(&walk));
 
     rctx->next = eme2_phase3;
-    ablkcipher_request_set_crypt(
-                subreq, req->dst, req->dst,
-                reqsize, NULL);
-    ablkcipher_request_set_callback(
-                subreq, flags,
-                eme2_callback, rctx);
+    ablkcipher_request_set_crypt(subreq, req->dst, req->dst, reqsize, NULL);
+    ablkcipher_request_set_callback(subreq, flags, eme2_callback, rctx);
     err = rctx->crypt_ecb_fn(subreq);
     if (err != 0) {
         return err;
@@ -585,7 +577,7 @@ static int init_tfm(struct crypto_tfm *tfm)
 {
     struct crypto_cipher *cipher;
     struct crypto_ablkcipher *cipher_ecb;
-    struct crypto_instance *inst = (void *)tfm->__crt_alg;
+    struct crypto_instance *inst = crypto_tfm_alg_instance(tfm);
     struct eme2_instance_ctx *inst_ctx = crypto_instance_ctx(inst);
     struct eme2_ctx *ctx = crypto_tfm_ctx(tfm);
     unsigned int align;
