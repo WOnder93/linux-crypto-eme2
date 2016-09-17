@@ -1,6 +1,6 @@
-obj-m += eme2_module.o
+obj-m += eme2_module.o eme2_test.o
 
-eme2_module-objs += blockwalk.o eme2.o eme2_test.o
+eme2_module-objs += blockwalk.o eme2.o
 
 KERNEL_VERSION=$(shell uname -r)
 

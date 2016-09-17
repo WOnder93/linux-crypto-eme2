@@ -25,7 +25,6 @@
 #include <linux/scatterlist.h>
 
 #include "eme2.h"
-#include "eme2_test.h"
 #include "blockwalk.h"
 
 struct eme2_req_ctx;
@@ -752,19 +751,7 @@ static struct crypto_template crypto_tmpl = {
 
 static int __init crypto_module_init(void)
 {
-    int err;
-
-    printk("eme2: Loading module...\n");
-
-    err = crypto_register_template(&crypto_tmpl);
-    if (err) {
-        return err;
-    }
-    err = eme2_run_tests();
-    if (err) {
-        crypto_unregister_template(&crypto_tmpl);
-    }
-    return err;
+    return crypto_register_template(&crypto_tmpl);
 }
 
 static void __exit crypto_module_exit(void)

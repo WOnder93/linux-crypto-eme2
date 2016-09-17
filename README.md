@@ -20,6 +20,11 @@ To reinstall, run:
 sudo rmmod eme2_module && sudo insmod eme2_module.ko
 ```
 
+To install the module that checks the test vectors, run:
+```bash
+sudo insmod eme2_test.ko
+```
+
 To see if the tests passed, run `dmesg | less +G`.
 
 ## Using with Cryptsetup
